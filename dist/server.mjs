@@ -412,19 +412,31 @@ var AgentLinkServer = class {
       });
       return;
     }
+    if (req.method === "DELETE" && parsedUrl.startsWith("/api/links/")) {
+      const linkId = parsedUrl.replace("/api/links/", "").trim();
+      const existed = this.links.delete(linkId);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", severed: existed }));
+      return;
+    }
     if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message"))) {
       const parts = parsedUrl.split("/");
       const linkId = parts[3];
       const link = this.links.get(linkId);
       readJson((body) => {
         const senderId = body.senderId;
-        const targetId = senderId === link?.agentAId ? link?.agentBId : link?.agentAId;
+        const targetId = senderId === link?.agentAId ? link?.agentBId : senderId === link?.agentBId ? link?.agentAId : void 0;
         if (targetId) {
+          if (link) link.framesCount = (link.framesCount || 0) + 1;
+          const senderAgent = this.agents.get(senderId);
           const q = this.messageQueues.get(targetId) || [];
           this.messageQueues.set(targetId, q);
           q.push({
             linkId,
             senderId,
+            senderEncPub: senderAgent?.encPub,
+            senderSignPub: senderAgent?.signPub,
+            senderKid: senderAgent?.kid,
             payload: body.payload,
             timestamp: (/* @__PURE__ */ new Date()).toISOString()
           });
@@ -439,7 +451,7 @@ var AgentLinkServer = class {
           }
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", delivered: true }));
+        res.end(JSON.stringify({ status: "ok", delivered: Boolean(targetId) }));
       });
       return;
     }

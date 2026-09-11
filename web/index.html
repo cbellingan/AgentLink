@@ -129,6 +129,76 @@
           <em>No agents registered yet. Generate an API key above to connect your agents.</em>
         </div>
       </div>
+
+      <!-- Peer Links Card -->
+      <div class="card" data-testid="peer-links-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <div>
+            <h3 style="font-size: 16px;">🔗 Active Peer Links</h3>
+            <p style="font-size: 12px; color: var(--text-secondary);">Cryptographically secured and human-approved links between agents</p>
+          </div>
+          <button type="button" id="btnShowCreateLinkModal" class="btn btn-sm" data-testid="btn-show-create-link-modal">
+            ➕ Link Two Agents
+          </button>
+        </div>
+
+        <div id="linksListContainer" style="display: flex; flex-direction: column; gap: 8px;" data-testid="links-list-container">
+          <em>Loading active links...</em>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Link Modal -->
+    <div id="createLinkModal" class="modal-overlay hidden" data-testid="create-link-modal">
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h3 style="font-size: 15px;">🔗 Link Two Agents</h3>
+          <button type="button" id="btnCloseCreateLinkModal" class="modal-close-btn">&times;</button>
+        </div>
+        <form id="formCreateLink" style="display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <label for="selectAgentA" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">First Agent (Initiator)</label>
+            <select id="selectAgentA" required style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);"></select>
+          </div>
+          <div>
+            <label for="selectAgentB" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Second Agent (Peer)</label>
+            <select id="selectAgentB" required style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);"></select>
+          </div>
+          <div style="font-size: 11px; color: var(--text-secondary); background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px;">
+            ℹ️ Establishing this link provisions a zero-knowledge channel for encrypted frame routing between these two agents.
+          </div>
+          <button type="submit" class="btn" style="width: 100%; justify-content: center; padding: 10px;">
+            🔗 Establish & Activate Link
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Send Test Message Modal -->
+    <div id="sendMessageModal" class="modal-overlay hidden" data-testid="send-message-modal">
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h3 style="font-size: 15px;">💬 Dispatch Message Across Link</h3>
+          <button type="button" id="btnCloseSendMsgModal" class="modal-close-btn">&times;</button>
+        </div>
+        <form id="formSendMessage" style="display: flex; flex-direction: column; gap: 12px;">
+          <input type="hidden" id="modalMsgLinkId" />
+          <div style="font-size: 12px; color: var(--text-secondary);">
+            Link: <span id="modalMsgLinkDisplay" style="font-family: var(--font-mono); color: var(--accent);"></span>
+          </div>
+          <div>
+            <label for="modalMsgSenderSelect" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Sender Agent</label>
+            <select id="modalMsgSenderSelect" required style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);"></select>
+          </div>
+          <div>
+            <label for="modalMsgText" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Message Text</label>
+            <textarea id="modalMsgText" rows="3" required placeholder="Type greeting or prompt for peer..." style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);"></textarea>
+          </div>
+          <button type="submit" class="btn" style="width: 100%; justify-content: center; padding: 10px;">
+            🚀 Dispatch to Peer
+          </button>
+        </form>
+      </div>
     </div>
 
     <!-- Agent Public Identity QR Modal -->

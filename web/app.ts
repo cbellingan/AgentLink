@@ -257,6 +257,9 @@ async function refreshFleetAgents() {
             </span>
           </div>
           <div style="display: flex; gap: 6px;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.promptCreateLink('${a.id}')" title="Link this agent to another peer">
+              🔗 Link
+            </button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="window.showAgentQr('${a.id}')" data-testid="btn-view-agent-qr-${a.id}">
               📱 View QR
             </button>
@@ -272,17 +275,237 @@ async function refreshFleetAgents() {
   }
 }
 
+// 5. Peer Links Management
+const linksListContainer = document.getElementById('linksListContainer')!;
+const btnShowCreateLinkModal = document.getElementById('btnShowCreateLinkModal')!;
+const createLinkModal = document.getElementById('createLinkModal')!;
+const btnCloseCreateLinkModal = document.getElementById('btnCloseCreateLinkModal')!;
+const formCreateLink = document.getElementById('formCreateLink') as HTMLFormElement;
+const selectAgentA = document.getElementById('selectAgentA') as HTMLSelectElement;
+const selectAgentB = document.getElementById('selectAgentB') as HTMLSelectElement;
+
+// Send message modal elements
+const sendMessageModal = document.getElementById('sendMessageModal')!;
+const btnCloseSendMsgModal = document.getElementById('btnCloseSendMsgModal')!;
+const formSendMessage = document.getElementById('formSendMessage') as HTMLFormElement;
+const modalMsgLinkId = document.getElementById('modalMsgLinkId') as HTMLInputElement;
+const modalMsgLinkDisplay = document.getElementById('modalMsgLinkDisplay')!;
+const modalMsgSenderSelect = document.getElementById('modalMsgSenderSelect') as HTMLSelectElement;
+const modalMsgText = document.getElementById('modalMsgText') as HTMLTextAreaElement;
+
+const activeLinks = new Map<string, any>();
+
+async function refreshPeerLinks() {
+  try {
+    const res = await apiRequest('/api/links');
+    const links: any[] = res.links || [];
+
+    activeLinks.clear();
+    links.forEach(l => activeLinks.set(l.id, l));
+
+    if (links.length === 0) {
+      linksListContainer.innerHTML = `<em>No active links yet. Click "➕ Link Two Agents" to link your enrolled agents.</em>`;
+    } else {
+      linksListContainer.innerHTML = links.map(l => {
+        const isActive = l.status === 'active';
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border);">
+            <div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 13px;">${l.agentAId}</strong>
+                <span style="color: var(--text-secondary); font-size: 12px;">⟷</span>
+                <strong style="color: #38bdf8; font-family: var(--font-mono); font-size: 13px;">${l.agentBId}</strong>
+                <span class="badge ${isActive ? 'badge-success' : 'badge-warning'}" style="font-size: 10px;">
+                  ${isActive ? '● Active' : '● Pending Approval'}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">
+                ID: <span style="font-family: var(--font-mono);">${l.id}</span>
+                &bull; Frames: <strong>${l.framesCount || 0}</strong>
+                &bull; Created: ${new Date(l.createdAt).toLocaleTimeString()}
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              ${!isActive ? `
+                <button type="button" class="btn btn-sm" style="background: #059669;" onclick="window.approveLink('${l.id}')">
+                  ✓ Approve Link
+                </button>
+              ` : ''}
+              <button type="button" class="btn btn-secondary btn-sm" onclick="window.openSendMsgModal('${l.id}')">
+                💬 Message
+              </button>
+              <button type="button" class="btn btn-danger btn-sm" onclick="window.severLink('${l.id}')">
+                Sever
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  } catch (err) {
+    console.error('Failed to refresh links:', err);
+  }
+}
+
+function populateLinkSelects(preselectA?: string) {
+  const agents = Array.from(fleetAgents.values());
+  selectAgentA.innerHTML = '';
+  selectAgentB.innerHTML = '';
+
+  if (agents.length === 0) {
+    selectAgentA.innerHTML = '<option value="">No agents enrolled</option>';
+    selectAgentB.innerHTML = '<option value="">No agents enrolled</option>';
+    return;
+  }
+
+  agents.forEach(a => {
+    const optA = document.createElement('option');
+    optA.value = a.id;
+    optA.textContent = `${a.id} (${a.kid ? a.kid.slice(0, 16) : 'local'}...)`;
+    selectAgentA.appendChild(optA);
+
+    const optB = document.createElement('option');
+    optB.value = a.id;
+    optB.textContent = `${a.id} (${a.kid ? a.kid.slice(0, 16) : 'local'}...)`;
+    selectAgentB.appendChild(optB);
+  });
+
+  if (preselectA && fleetAgents.has(preselectA)) {
+    selectAgentA.value = preselectA;
+    // Set B to different if possible
+    const other = agents.find(a => a.id !== preselectA);
+    if (other) selectAgentB.value = other.id;
+  } else if (agents.length >= 2) {
+    selectAgentA.value = agents[0].id;
+    selectAgentB.value = agents[1].id;
+  }
+}
+
+(window as any).promptCreateLink = (agentId: string) => {
+  populateLinkSelects(agentId);
+  createLinkModal.classList.remove('hidden');
+};
+
+btnShowCreateLinkModal?.addEventListener('click', () => {
+  populateLinkSelects();
+  createLinkModal.classList.remove('hidden');
+});
+
+btnCloseCreateLinkModal?.addEventListener('click', () => {
+  createLinkModal.classList.add('hidden');
+});
+
+formCreateLink?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const agentAId = selectAgentA.value;
+  const agentBId = selectAgentB.value;
+
+  if (agentAId === agentBId) {
+    alert('Please select two different agents to link.');
+    return;
+  }
+
+  try {
+    const res = await apiRequest('/api/links/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentAId, agentBId }),
+    });
+
+    if (res.linkId) {
+      // Auto-approve as human controller
+      await apiRequest(`/api/links/${encodeURIComponent(res.linkId)}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peerVerification: 'optical_qr_verified' }),
+      });
+      createLinkModal.classList.add('hidden');
+      await refreshPeerLinks();
+    }
+  } catch (err: any) {
+    alert(`Failed to establish link: ${err.message}`);
+  }
+});
+
+(window as any).approveLink = async (linkId: string) => {
+  try {
+    await apiRequest(`/api/links/${encodeURIComponent(linkId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerVerification: 'optical_qr_verified' }),
+    });
+    await refreshPeerLinks();
+  } catch (err: any) {
+    alert(`Approval failed: ${err.message}`);
+  }
+};
+
+(window as any).severLink = async (linkId: string) => {
+  if (!confirm(`Sever this link (${linkId})? Messages will no longer route between these agents.`)) return;
+  try {
+    await apiRequest(`/api/links/${encodeURIComponent(linkId)}`, { method: 'DELETE' });
+    await refreshPeerLinks();
+  } catch (err: any) {
+    alert(`Severing link failed: ${err.message}`);
+  }
+};
+
+// Send Message Modal logic
+(window as any).openSendMsgModal = (linkId: string) => {
+  const link = activeLinks.get(linkId);
+  if (!link) return;
+
+  modalMsgLinkId.value = linkId;
+  modalMsgLinkDisplay.textContent = `${link.agentAId} ⟷ ${link.agentBId}`;
+  modalMsgSenderSelect.innerHTML = `
+    <option value="${link.agentAId}">${link.agentAId}</option>
+    <option value="${link.agentBId}">${link.agentBId}</option>
+  `;
+  modalMsgText.value = '';
+  sendMessageModal.classList.remove('hidden');
+};
+
+btnCloseSendMsgModal?.addEventListener('click', () => {
+  sendMessageModal.classList.add('hidden');
+});
+
+formSendMessage?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const linkId = modalMsgLinkId.value;
+  const senderId = modalMsgSenderSelect.value;
+  const text = modalMsgText.value.trim();
+
+  if (!text) return;
+
+  try {
+    const res = await apiRequest(`/api/links/${encodeURIComponent(linkId)}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senderId, payload: text }),
+    });
+
+    if (res.status === 'ok') {
+      sendMessageModal.classList.add('hidden');
+      alert(`Message dispatched from ${senderId}! When peer polls, they will receive it.`);
+      await refreshPeerLinks();
+    }
+  } catch (err: any) {
+    alert(`Message dispatch failed: ${err.message}`);
+  }
+});
+
 (window as any).deregisterAgent = async (agentId: string) => {
   if (!confirm(`De-register agent "${agentId}"?`)) return;
   try {
     await apiRequest(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
     await refreshFleetAgents();
+    await refreshPeerLinks();
   } catch (err: any) {
     alert(`De-registration failed: ${err.message}`);
   }
 };
 
-// 5. Optical QR Modal
+// 6. Optical QR Modal
 (window as any).showAgentQr = (agentId: string) => {
   const agent = fleetAgents.get(agentId) || { id: agentId };
   modalAgentName.textContent = agent.id;
@@ -323,7 +546,7 @@ btnCopyModalQrJson?.addEventListener('click', () => {
 });
 
 async function refreshDashboard() {
-  await Promise.all([refreshApiKeys(), refreshFleetAgents()]);
+  await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks()]);
 }
 
 // 6. Initialization

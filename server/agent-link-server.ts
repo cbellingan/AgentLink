@@ -480,6 +480,14 @@ export class AgentLinkServer {
       return;
     }
 
+    if (req.method === 'DELETE' && parsedUrl.startsWith('/api/links/')) {
+      const linkId = parsedUrl.replace('/api/links/', '').trim();
+      const existed = this.links.delete(linkId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', severed: existed }));
+      return;
+    }
+
     // 10. Link Message Dispatch
     if (req.method === 'POST' && parsedUrl.startsWith('/api/links/') && (parsedUrl.endsWith('/send') || parsedUrl.endsWith('/message'))) {
       const parts = parsedUrl.split('/');
@@ -487,14 +495,19 @@ export class AgentLinkServer {
       const link = this.links.get(linkId);
       readJson((body) => {
         const senderId = body.senderId;
-        const targetId = senderId === link?.agentAId ? link?.agentBId : link?.agentAId;
+        const targetId = senderId === link?.agentAId ? link?.agentBId : (senderId === link?.agentBId ? link?.agentAId : undefined);
 
         if (targetId) {
+          if (link) link.framesCount = (link.framesCount || 0) + 1;
+          const senderAgent = this.agents.get(senderId);
           const q = this.messageQueues.get(targetId) || [];
           this.messageQueues.set(targetId, q);
           q.push({
             linkId,
             senderId,
+            senderEncPub: senderAgent?.encPub,
+            senderSignPub: senderAgent?.signPub,
+            senderKid: senderAgent?.kid,
             payload: body.payload,
             timestamp: new Date().toISOString(),
           });
@@ -511,7 +524,7 @@ export class AgentLinkServer {
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', delivered: true }));
+        res.end(JSON.stringify({ status: 'ok', delivered: Boolean(targetId) }));
       });
       return;
     }
