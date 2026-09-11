@@ -1,0 +1,6 @@
+name = "agent-link"
+main = "worker.ts"
+compatibility_date = "2024-09-01"
+
+[vars]
+ADMIN_EMAIL = "cbellingan@gmail.com"

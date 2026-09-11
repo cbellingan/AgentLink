@@ -1,0 +1,36 @@
+{
+  "name": "agent-link",
+  "version": "1.0.0",
+  "description": "AgentLink: Zero-Knowledge Autonomous Agent Mesh & Optical Anchor Server",
+  "main": "dist/server.mjs",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:server && npm run build:web && npm run build:worker",
+    "build:server": "esbuild server/run.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --packages=external",
+    "build:web": "esbuild web/app.ts --bundle --outfile=web/bundle.js --format=esm --sourcemap",
+    "build:worker": "esbuild cloudflare/worker.ts --bundle --format=esm --outfile=dist/worker.mjs --target=es2022",
+    "start": "node dist/server.mjs",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "audit:security": "node scripts/security-auditor.mjs"
+  },
+  "keywords": ["agent", "zero-knowledge", "security", "ed25519", "x25519", "qr", "mcp"],
+  "author": "Carl Bellingan <cbellingan@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "@types/node": "^22.13.1",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.25.0",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5",
+    "wrangler": "^3.109.1",
+    "ws": "^8.18.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
