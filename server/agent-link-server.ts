@@ -6,6 +6,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, AccessLogEntry } from './types.js';
 
@@ -28,10 +29,142 @@ export class AgentLinkServer {
   private pollWaiters: Map<string, Array<(msgs: any[]) => void>> = new Map(); // agentId -> resolvers
   private accessLogs: AccessLogEntry[] = [];
   private supervisorSockets: Set<WebSocket> = new Set();
+  private stateFilePath: string;
 
   constructor(port: number = 3000, staticPath?: string) {
     this.port = port;
     this.staticPath = staticPath || path.resolve('web');
+    this.stateFilePath = process.env.DATA_PATH || path.resolve('.data/agent-link-state.json');
+    this.loadState();
+    this.discoverLocalAgents();
+  }
+
+  private loadState(): void {
+    try {
+      if (fs.existsSync(this.stateFilePath)) {
+        const raw = fs.readFileSync(this.stateFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.apiKeys) {
+          for (const [k, v] of Object.entries(parsed.apiKeys)) {
+            this.apiKeys.set(k, v as ApiKeyRecord);
+          }
+        }
+        if (parsed.agents) {
+          for (const [k, v] of Object.entries(parsed.agents)) {
+            this.agents.set(k, v as AgentRecord);
+            if (!this.messageQueues.has(k)) {
+              this.messageQueues.set(k, []);
+            }
+          }
+        }
+        if (parsed.links) {
+          for (const [k, v] of Object.entries(parsed.links)) {
+            this.links.set(k, v as LinkRecord);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[AgentLink Server] Could not load state from disk:', e);
+    }
+  }
+
+  private saveState(): void {
+    try {
+      const dir = path.dirname(this.stateFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const data = {
+        apiKeys: Object.fromEntries(this.apiKeys.entries()),
+        agents: Object.fromEntries(this.agents.entries()),
+        links: Object.fromEntries(this.links.entries()),
+      };
+      fs.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[AgentLink Server] Could not save state to disk:', e);
+    }
+  }
+
+  private discoverLocalAgents(): void {
+    // 1. Ensure at least one primary API key exists for Carl
+    if (this.apiKeys.size === 0) {
+      const defaultKeyVal = 'sec_apk_carl_fleet_primary';
+      this.apiKeys.set(defaultKeyVal, {
+        id: 'key_primary_default',
+        key: defaultKeyVal,
+        ownerHumanId: 'human_carl',
+        label: 'Primary Fleet Key (Carl Bellingan)',
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 2. Discover existing keyrings in ~/.agent-link/
+    try {
+      const homeDir = os.homedir();
+      const keyDir = path.join(homeDir, '.agent-link');
+      if (fs.existsSync(keyDir)) {
+        const files = fs.readdirSync(keyDir);
+        for (const file of files) {
+          if (file.endsWith('.json')) {
+            try {
+              const content = JSON.parse(fs.readFileSync(path.join(keyDir, file), 'utf8'));
+              const agentId = content.agent_id || file.replace('.json', '');
+              if (content.signPub && content.encPub && !this.agents.has(agentId)) {
+                const record: AgentRecord = {
+                  id: agentId,
+                  ownerHumanId: 'human_carl',
+                  registeredAt: new Date().toISOString(),
+                  signPub: content.signPub,
+                  encPub: content.encPub,
+                  kid: content.kid || `kid-${agentId}`,
+                  qrPayload: JSON.stringify({
+                    v: 1,
+                    agent: agentId,
+                    signPub: content.signPub,
+                    encPub: content.encPub,
+                    kid: content.kid,
+                  }),
+                  connected: false,
+                  polling: true,
+                  lastSeen: new Date().toISOString(),
+                };
+                this.agents.set(agentId, record);
+                if (!this.messageQueues.has(agentId)) {
+                  this.messageQueues.set(agentId, []);
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[AgentLink Server] Error during local agent discovery:', e);
+    }
+
+    // 3. If antigravity and ted are present, ensure a default active link exists
+    if (this.agents.has('antigravity') && this.agents.has('ted')) {
+      const linkExists = Array.from(this.links.values()).some(
+        l => (l.agentAId === 'antigravity' && l.agentBId === 'ted') || (l.agentAId === 'ted' && l.agentBId === 'antigravity')
+      );
+      if (!linkExists) {
+        const linkId = 'link_antigravity_ted_primary';
+        this.links.set(linkId, {
+          id: linkId,
+          agentAId: 'antigravity',
+          agentBId: 'ted',
+          initiatorHumanId: 'human_carl',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          linkKey: `sec_link_${crypto.randomBytes(16).toString('hex')}`,
+          approvals: {},
+          framesCount: 0,
+          bytesAtoB: 0,
+          bytesBtoA: 0,
+        });
+      }
+    }
+
+    this.saveState();
   }
 
   public async listen(): Promise<number> {
@@ -260,6 +393,7 @@ export class AgentLinkServer {
         };
 
         this.apiKeys.set(keyVal, keyRecord);
+        this.saveState();
 
         setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
         res.writeHead(201, { 'Content-Type': 'application/json' });
@@ -307,6 +441,7 @@ export class AgentLinkServer {
           break;
         }
       }
+      if (deleted) this.saveState();
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', deleted }));
@@ -352,6 +487,7 @@ export class AgentLinkServer {
         if (!this.messageQueues.has(agentId)) {
           this.messageQueues.set(agentId, []);
         }
+        this.saveState();
 
         setSecurityNote(`AGENT REGISTERED: ${agentId} bound to Carl's fleet`);
         this.notifySupervisors({ type: 'agent_registered', agent: agentRecord });
@@ -382,6 +518,7 @@ export class AgentLinkServer {
       const agentId = parsedUrl.replace('/api/agents/', '').trim();
       const existed = this.agents.delete(agentId);
       this.messageQueues.delete(agentId);
+      if (existed) this.saveState();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', deregistered: existed }));
       return;
@@ -447,6 +584,7 @@ export class AgentLinkServer {
           bytesBtoA: 0,
         };
         this.links.set(linkId, record);
+        this.saveState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', linkId: record.id, link: record }));
       });
@@ -474,6 +612,7 @@ export class AgentLinkServer {
           const targetAgent = this.agents.get(link.agentBId);
           if (targetAgent) targetAgent.peerVerification = body.peerVerification;
         }
+        this.saveState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', linkId: link.id, link }));
       });
@@ -483,6 +622,7 @@ export class AgentLinkServer {
     if (req.method === 'DELETE' && parsedUrl.startsWith('/api/links/')) {
       const linkId = parsedUrl.replace('/api/links/', '').trim();
       const existed = this.links.delete(linkId);
+      if (existed) this.saveState();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', severed: existed }));
       return;

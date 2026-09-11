@@ -1,0 +1,100 @@
+{
+  "apiKeys": {
+    "sec_apk_carl_fleet_primary": {
+      "id": "key_primary_default",
+      "key": "sec_apk_carl_fleet_primary",
+      "ownerHumanId": "human_carl",
+      "label": "Primary Fleet Key (Carl Bellingan)",
+      "createdAt": "2026-09-11T15:03:33.263Z"
+    }
+  },
+  "agents": {
+    "agent-cli-test-registered": {
+      "id": "agent-cli-test-registered",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.459Z",
+      "signPub": "oxBa3dZpBf27Cx96c3hMXYBdjpU6JjeEWHvHDrn+qUQ=",
+      "encPub": "Q0498NrbEg6EfB7q4v5BTkKB2iV5/l44CVk9HoJ5eW0=",
+      "kid": "kid-agent-cli-test-registered-52e475203fe9df0a",
+      "qrPayload": "{\"v\":1,\"agent\":\"agent-cli-test-registered\",\"signPub\":\"oxBa3dZpBf27Cx96c3hMXYBdjpU6JjeEWHvHDrn+qUQ=\",\"encPub\":\"Q0498NrbEg6EfB7q4v5BTkKB2iV5/l44CVk9HoJ5eW0=\",\"kid\":\"kid-agent-cli-test-registered-52e475203fe9df0a\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.460Z"
+    },
+    "agent-cli-test": {
+      "id": "agent-cli-test",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "signPub": "E6wLLK16es9dXusq93bd6oMwq5TArqc5kLpu6EOpCus=",
+      "encPub": "w5PFL7fGxE/Bp6Jy+t3SWM+IfDbiMqFiH7Qsqpm+rxY=",
+      "kid": "kid-agent-cli-test-31e54c617e4368ee",
+      "qrPayload": "{\"v\":1,\"agent\":\"agent-cli-test\",\"signPub\":\"E6wLLK16es9dXusq93bd6oMwq5TArqc5kLpu6EOpCus=\",\"encPub\":\"w5PFL7fGxE/Bp6Jy+t3SWM+IfDbiMqFiH7Qsqpm+rxY=\",\"kid\":\"kid-agent-cli-test-31e54c617e4368ee\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.460Z"
+    },
+    "agent": {
+      "id": "agent",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "signPub": "wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=",
+      "encPub": "3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=",
+      "kid": "kid-agent-a0b99f26dd3c4227",
+      "qrPayload": "{\"v\":1,\"agent\":\"agent\",\"signPub\":\"wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=\",\"encPub\":\"3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=\",\"kid\":\"kid-agent-a0b99f26dd3c4227\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.460Z"
+    },
+    "antigravity": {
+      "id": "antigravity",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "signPub": "eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=",
+      "encPub": "QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=",
+      "kid": "kid-antigravity-17fb0479c9e9bbfb",
+      "qrPayload": "{\"v\":1,\"agent\":\"antigravity\",\"signPub\":\"eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=\",\"encPub\":\"QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=\",\"kid\":\"kid-antigravity-17fb0479c9e9bbfb\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.460Z"
+    },
+    "ted": {
+      "id": "ted",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "signPub": "sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=",
+      "encPub": "KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=",
+      "kid": "kid-ted-999d3c4b164498be",
+      "qrPayload": "{\"v\":1,\"agent\":\"ted\",\"signPub\":\"sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=\",\"encPub\":\"KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=\",\"kid\":\"kid-ted-999d3c4b164498be\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.460Z"
+    },
+    "test-live": {
+      "id": "test-live",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T15:03:51.461Z",
+      "signPub": "Xkwx35geL+N7/+3HY+EFrwpFktl4mUpPiABSHbwEb6E=",
+      "encPub": "UYA+48azPt8Lz3A7B1C7sQO4bA2gX9SHxvSn2sZ8Fzo=",
+      "kid": "kid-test-live-9512ba1b77a1ebe6",
+      "qrPayload": "{\"v\":1,\"agent\":\"test-live\",\"signPub\":\"Xkwx35geL+N7/+3HY+EFrwpFktl4mUpPiABSHbwEb6E=\",\"encPub\":\"UYA+48azPt8Lz3A7B1C7sQO4bA2gX9SHxvSn2sZ8Fzo=\",\"kid\":\"kid-test-live-9512ba1b77a1ebe6\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T15:03:51.461Z"
+    }
+  },
+  "links": {
+    "link_antigravity_ted_primary": {
+      "id": "link_antigravity_ted_primary",
+      "agentAId": "antigravity",
+      "agentBId": "ted",
+      "initiatorHumanId": "human_carl",
+      "status": "active",
+      "createdAt": "2026-09-11T15:03:51.461Z",
+      "linkKey": "sec_link_0c9e15d8beb81e45499744392d1de448",
+      "approvals": {},
+      "framesCount": 0,
+      "bytesAtoB": 0,
+      "bytesBtoA": 0
+    }
+  }
+}
