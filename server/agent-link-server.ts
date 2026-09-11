@@ -26,7 +26,7 @@ export class AgentLinkServer {
   private agents: Map<string, AgentRecord> = new Map(); // agentId -> record
   private links: Map<string, LinkRecord> = new Map(); // linkId -> record
   private messageQueues: Map<string, Array<any>> = new Map(); // agentId -> pending messages
-  private pollWaiters: Map<string, Array<(msgs: any[]) => void>> = new Map(); // agentId -> resolvers
+  private pollWaiters: Map<string, Array<(msgs: any[]) => boolean>> = new Map(); // agentId -> resolvers
   private accessLogs: AccessLogEntry[] = [];
   private supervisorSockets: Set<WebSocket> = new Set();
   private stateFilePath: string;
@@ -535,6 +535,16 @@ export class AgentLinkServer {
         agent.lastSeen = new Date().toISOString();
       }
 
+      // Parse timeout query param if present
+      let timeoutMs = 15000;
+      if (req.url && req.url.includes('?')) {
+        const query = new URLSearchParams(req.url.split('?')[1]);
+        const t = parseInt(query.get('timeout') || '15000', 10);
+        if (!isNaN(t) && t > 0) {
+          timeoutMs = Math.min(t, 60000);
+        }
+      }
+
       const q = this.messageQueues.get(agentId) || [];
       if (q.length > 0) {
         const msgs = [...q];
@@ -545,23 +555,42 @@ export class AgentLinkServer {
       }
 
       // Long-poll wait
-      const waiters = this.pollWaiters.get(agentId) || [];
-      this.pollWaiters.set(agentId, waiters);
+      let waiters = this.pollWaiters.get(agentId);
+      if (!waiters) {
+        waiters = [];
+        this.pollWaiters.set(agentId, waiters);
+      }
 
-      let timedOut = false;
+      let active = true;
+      const resolver = (msgs: any[]): boolean => {
+        if (!active) return false;
+        active = false;
+        clearTimeout(timer);
+        const idx = waiters!.indexOf(resolver);
+        if (idx !== -1) waiters!.splice(idx, 1);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ messages: msgs }));
+        return true;
+      };
+
       const timer = setTimeout(() => {
-        timedOut = true;
+        if (!active) return;
+        active = false;
+        const idx = waiters!.indexOf(resolver);
+        if (idx !== -1) waiters!.splice(idx, 1);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ messages: [] }));
-      }, 15000);
+      }, timeoutMs);
 
-      waiters.push((msgs) => {
-        if (!timedOut) {
-          clearTimeout(timer);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ messages: msgs }));
-        }
+      req.on('close', () => {
+        if (!active) return;
+        active = false;
+        clearTimeout(timer);
+        const idx = waiters!.indexOf(resolver);
+        if (idx !== -1) waiters!.splice(idx, 1);
       });
+
+      waiters.push(resolver);
       return;
     }
 
@@ -594,6 +623,19 @@ export class AgentLinkServer {
     if (req.method === 'GET' && parsedUrl === '/api/links') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', links: Array.from(this.links.values()) }));
+      return;
+    }
+
+    if (req.method === 'GET' && parsedUrl.startsWith('/api/links/') && !parsedUrl.endsWith('/poll') && !parsedUrl.endsWith('/approve') && !parsedUrl.endsWith('/send') && !parsedUrl.endsWith('/message')) {
+      const linkId = parsedUrl.replace('/api/links/', '').trim();
+      const link = this.links.get(linkId);
+      if (!link) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'link_not_found' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', link }));
       return;
     }
 
@@ -638,7 +680,26 @@ export class AgentLinkServer {
         const targetId = senderId === link?.agentAId ? link?.agentBId : (senderId === link?.agentBId ? link?.agentAId : undefined);
 
         if (targetId) {
-          if (link) link.framesCount = (link.framesCount || 0) + 1;
+          if (link) {
+            link.framesCount = (link.framesCount || 0) + 1;
+            if (!link.recentMessages) link.recentMessages = [];
+            const isEnc = typeof body.payload === 'object' && body.payload !== null && Boolean(body.payload.data);
+            const previewText = typeof body.payload === 'string' 
+              ? body.payload 
+              : (isEnc ? `[E2EE ${body.payload.data.slice(0, 16)}...]` : '[E2EE Encrypted Payload]');
+            link.recentMessages.push({
+              id: `msg_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+              timestamp: new Date().toISOString(),
+              senderId,
+              targetId,
+              text: previewText,
+              isEncrypted: isEnc,
+              payload: body.payload,
+            });
+            if (link.recentMessages.length > 100) link.recentMessages.shift();
+            this.saveState();
+          }
+
           const senderAgent = this.agents.get(senderId);
           const q = this.messageQueues.get(targetId) || [];
           this.messageQueues.set(targetId, q);
@@ -653,12 +714,13 @@ export class AgentLinkServer {
           });
 
           const waiters = this.pollWaiters.get(targetId) || [];
-          if (waiters.length > 0) {
-            const resolver = waiters.shift();
-            if (resolver) {
-              const msgs = [...q];
-              q.length = 0;
-              resolver(msgs);
+          while (waiters.length > 0 && q.length > 0) {
+            const resolver = waiters[0];
+            const msgs = [...q];
+            q.length = 0;
+            const delivered = resolver(msgs);
+            if (!delivered) {
+              q.unshift(...msgs);
             }
           }
         }

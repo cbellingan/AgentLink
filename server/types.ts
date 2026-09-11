@@ -29,6 +29,16 @@ export interface AgentRecord {
   peerVerification?: any;
 }
 
+export interface LinkMessageEntry {
+  id?: string;
+  timestamp: string;
+  senderId: string;
+  targetId?: string;
+  text: string;
+  isEncrypted?: boolean;
+  payload?: any;
+}
+
 export interface LinkRecord {
   id: string;
   agentAId: string;
@@ -42,7 +52,7 @@ export interface LinkRecord {
   bytesAtoB?: number;
   bytesBtoA?: number;
   framesCount?: number;
-  recentMessages?: Array<{ timestamp: string; senderId: string; text: string }>;
+  recentMessages?: Array<LinkMessageEntry>;
 }
 
 export interface AccessLogEntry {

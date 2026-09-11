@@ -139,4 +139,44 @@ describe('AgentLink Server Test Suite', () => {
     const agentsRes = await fetch(`${baseUrl}/api/agents`).then(r => r.json());
     expect(agentsRes.agents.some((a: any) => a.id === 'ted-agent')).toBe(true);
   });
+
+  it('6. Creates link, dispatches conversation frames, and returns flow via GET /api/links/:linkId', async () => {
+    // 1. Establish link
+    const linkRes = await fetch(`${baseUrl}/api/links/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentAId: 'antigravity', agentBId: 'ted-agent' }),
+    }).then(r => r.json());
+
+    expect(linkRes.status).toBe('ok');
+    const linkId = linkRes.linkId;
+
+    // Approve link
+    await fetch(`${baseUrl}/api/links/${linkId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    // 2. Dispatch a message into conversation
+    const msgRes = await fetch(`${baseUrl}/api/links/${linkId}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senderId: 'antigravity', payload: 'Hello Ted from the UI!' }),
+    }).then(r => r.json());
+
+    expect(msgRes.status).toBe('ok');
+
+    // 3. Retrieve link conversation flow
+    const getRes = await fetch(`${baseUrl}/api/links/${linkId}`);
+    expect(getRes.status).toBe(200);
+    const getData = await getRes.json();
+    expect(getData.status).toBe('ok');
+    expect(getData.link.id).toBe(linkId);
+    expect(getData.link.framesCount).toBe(1);
+    expect(getData.link.recentMessages.length).toBe(1);
+    expect(getData.link.recentMessages[0].senderId).toBe('antigravity');
+    expect(getData.link.recentMessages[0].targetId).toBe('ted-agent');
+    expect(getData.link.recentMessages[0].text).toBe('Hello Ted from the UI!');
+  });
 });
