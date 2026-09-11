@@ -1,304 +1,230 @@
 {
   "apiKeys": {
-    "sec_apk_carl_fleet_primary": {
-      "id": "key_primary_default",
-      "key": "sec_apk_carl_fleet_primary",
+    "sec_apk_6a11eca936b7fbbdf4a0dd1d335f0f7934f9954cc8f8688d756abeb6737a6f7d": {
+      "id": "key_1789160643794_fe284c4b",
+      "key": "sec_apk_6a11eca936b7fbbdf4a0dd1d335f0f7934f9954cc8f8688d756abeb6737a6f7d",
       "ownerHumanId": "human_carl",
-      "label": "Primary Fleet Key (Carl Bellingan)",
-      "createdAt": "2026-09-11T15:03:33.263Z",
-      "lastUsedAt": "2026-09-11T20:00:59.225Z"
+      "label": "Agent Key (9/11/2026)",
+      "createdAt": "2026-09-11T21:04:03.794Z",
+      "lastUsedAt": "2026-09-11T21:04:42.334Z"
     },
-    "sec_apk_2bea57b5827f8020bc1880ef901062af7a580b988c958cbae96b7d28bded7657": {
-      "id": "key_1789157363202_da5c39f4",
-      "key": "sec_apk_2bea57b5827f8020bc1880ef901062af7a580b988c958cbae96b7d28bded7657",
+    "sec_apk_5512efdca603d42cb52cac1a4246ba15dcb4bdc0135e26dd410a969a9832c32f": {
+      "id": "key_1789160916027_91d76361",
+      "key": "sec_apk_5512efdca603d42cb52cac1a4246ba15dcb4bdc0135e26dd410a969a9832c32f",
       "ownerHumanId": "human_carl",
       "label": "Alice Agent Production Key",
-      "createdAt": "2026-09-11T20:09:23.202Z",
-      "lastUsedAt": "2026-09-11T20:09:23.392Z"
+      "createdAt": "2026-09-11T21:08:36.027Z",
+      "lastUsedAt": "2026-09-11T21:08:36.224Z"
     },
-    "sec_apk_db862409d49cfb58a0a8b4afb1b1a2d02bd9d37f526eecdb162f26723c8b6783": {
-      "id": "key_1789157363204_f972b027",
-      "key": "sec_apk_db862409d49cfb58a0a8b4afb1b1a2d02bd9d37f526eecdb162f26723c8b6783",
+    "sec_apk_eb033559f9ee5afafecf662659eeea16d320faf8d2698374639a2317cb68b406": {
+      "id": "key_1789160916030_94ef7357",
+      "key": "sec_apk_eb033559f9ee5afafecf662659eeea16d320faf8d2698374639a2317cb68b406",
       "ownerHumanId": "human_carl",
       "label": "Bob Agent Production Key",
-      "createdAt": "2026-09-11T20:09:23.204Z",
-      "lastUsedAt": "2026-09-11T20:09:23.496Z"
-    },
-    "sec_apk_0a8a48503d8a33e48b816fe425a42eba1d7a387caca3002e136f3b74c5362eb8": {
-      "id": "key_1789157526593_a00ce0bb",
-      "key": "sec_apk_0a8a48503d8a33e48b816fe425a42eba1d7a387caca3002e136f3b74c5362eb8",
-      "ownerHumanId": "human_carl",
-      "label": "Alice Agent Production Key",
-      "createdAt": "2026-09-11T20:12:06.593Z",
-      "lastUsedAt": "2026-09-11T20:12:06.747Z"
-    },
-    "sec_apk_b7111e7b1e558b5baccdc0cf54c74eaa89fe9375c0f4c6ba0bfce03c5d6479b3": {
-      "id": "key_1789157526594_c2f5c52a",
-      "key": "sec_apk_b7111e7b1e558b5baccdc0cf54c74eaa89fe9375c0f4c6ba0bfce03c5d6479b3",
-      "ownerHumanId": "human_carl",
-      "label": "Bob Agent Production Key",
-      "createdAt": "2026-09-11T20:12:06.594Z",
-      "lastUsedAt": "2026-09-11T20:12:06.839Z"
-    },
-    "sec_apk_8d3f541eb20599ab23a3ae83ff691e20b93c5eac225549e98e790f6c5bb2f242": {
-      "id": "key_1789157534509_48ccccfc",
-      "key": "sec_apk_8d3f541eb20599ab23a3ae83ff691e20b93c5eac225549e98e790f6c5bb2f242",
-      "ownerHumanId": "human_carl",
-      "label": "Alice Agent Production Key",
-      "createdAt": "2026-09-11T20:12:14.509Z",
-      "lastUsedAt": "2026-09-11T20:12:14.664Z"
-    },
-    "sec_apk_536200001997a6020cc128db41c2123a7f3417bd75a136ec94886b5b87cce453": {
-      "id": "key_1789157534510_2a073886",
-      "key": "sec_apk_536200001997a6020cc128db41c2123a7f3417bd75a136ec94886b5b87cce453",
-      "ownerHumanId": "human_carl",
-      "label": "Bob Agent Production Key",
-      "createdAt": "2026-09-11T20:12:14.510Z",
-      "lastUsedAt": "2026-09-11T20:12:14.754Z"
-    },
-    "sec_apk_f0846a5530feddd4dc71d96337f5451ef2c0047e83d02824f5c2dbbbc1b6a402": {
-      "id": "key_1789157554997_916a4480",
-      "key": "sec_apk_f0846a5530feddd4dc71d96337f5451ef2c0047e83d02824f5c2dbbbc1b6a402",
-      "ownerHumanId": "human_carl",
-      "label": "Alice Agent Production Key",
-      "createdAt": "2026-09-11T20:12:34.997Z",
-      "lastUsedAt": "2026-09-11T20:12:35.157Z"
-    },
-    "sec_apk_b5f2453c0b0e7cecf3a8049512eb8327f995765d5beba40ebbd508bac3f203e5": {
-      "id": "key_1789157555000_cab9391f",
-      "key": "sec_apk_b5f2453c0b0e7cecf3a8049512eb8327f995765d5beba40ebbd508bac3f203e5",
-      "ownerHumanId": "human_carl",
-      "label": "Bob Agent Production Key",
-      "createdAt": "2026-09-11T20:12:35.000Z",
-      "lastUsedAt": "2026-09-11T20:12:35.250Z"
+      "createdAt": "2026-09-11T21:08:36.030Z",
+      "lastUsedAt": "2026-09-11T21:08:36.315Z"
     }
   },
   "agents": {
+    "right": {
+      "id": "right",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T21:04:29.888Z",
+      "signPub": "D6Mjj5ThA68wuBsZ3VLtjTMWv1mvwbH4oiyy6rwdg5w=",
+      "encPub": "v9eBgUInfxcTtz5x9cG4BvOsNHdMecxil0LDhO9o6Gc=",
+      "kid": "kid-right-09bb85a4a46f5e6b",
+      "qrPayload": "{\"v\": 1, \"agent\": \"right\", \"signPub\": \"D6Mjj5ThA68wuBsZ3VLtjTMWv1mvwbH4oiyy6rwdg5w=\", \"encPub\": \"v9eBgUInfxcTtz5x9cG4BvOsNHdMecxil0LDhO9o6Gc=\", \"kid\": \"kid-right-09bb85a4a46f5e6b\", \"iat\": \"2026-09-11T21:04:29.879678+00:00\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T21:06:22.547Z",
+      "peerVerification": "optical_qr_verified"
+    },
+    "my-left": {
+      "id": "my-left",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T21:04:42.334Z",
+      "signPub": "4EPd69d0UJvD7i2H894/kLWyD1SqMSr63bcwWO1wda8=",
+      "encPub": "6t3OpQRN1oIhqBqGR56pmoysxKIBH2Uz0TiZ0D1kejU=",
+      "kid": "kid-my-left-ac874eccc5709ca0",
+      "qrPayload": "{\"v\": 1, \"agent\": \"my-left\", \"signPub\": \"4EPd69d0UJvD7i2H894/kLWyD1SqMSr63bcwWO1wda8=\", \"encPub\": \"6t3OpQRN1oIhqBqGR56pmoysxKIBH2Uz0TiZ0D1kejU=\", \"kid\": \"kid-my-left-ac874eccc5709ca0\", \"iat\": \"2026-09-11T21:04:42.330277+00:00\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T21:06:22.545Z"
+    },
     "agent-cli-test-registered": {
       "id": "agent-cli-test-registered",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T15:03:51.459Z",
+      "registeredAt": "2026-09-11T21:08:35.996Z",
       "signPub": "oxBa3dZpBf27Cx96c3hMXYBdjpU6JjeEWHvHDrn+qUQ=",
       "encPub": "Q0498NrbEg6EfB7q4v5BTkKB2iV5/l44CVk9HoJ5eW0=",
       "kid": "kid-agent-cli-test-registered-52e475203fe9df0a",
       "qrPayload": "{\"v\":1,\"agent\":\"agent-cli-test-registered\",\"signPub\":\"oxBa3dZpBf27Cx96c3hMXYBdjpU6JjeEWHvHDrn+qUQ=\",\"encPub\":\"Q0498NrbEg6EfB7q4v5BTkKB2iV5/l44CVk9HoJ5eW0=\",\"kid\":\"kid-agent-cli-test-registered-52e475203fe9df0a\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T15:03:51.460Z"
+      "lastSeen": "2026-09-11T21:08:35.997Z"
     },
     "agent-cli-test": {
       "id": "agent-cli-test",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "registeredAt": "2026-09-11T21:08:35.997Z",
       "signPub": "E6wLLK16es9dXusq93bd6oMwq5TArqc5kLpu6EOpCus=",
       "encPub": "w5PFL7fGxE/Bp6Jy+t3SWM+IfDbiMqFiH7Qsqpm+rxY=",
       "kid": "kid-agent-cli-test-31e54c617e4368ee",
       "qrPayload": "{\"v\":1,\"agent\":\"agent-cli-test\",\"signPub\":\"E6wLLK16es9dXusq93bd6oMwq5TArqc5kLpu6EOpCus=\",\"encPub\":\"w5PFL7fGxE/Bp6Jy+t3SWM+IfDbiMqFiH7Qsqpm+rxY=\",\"kid\":\"kid-agent-cli-test-31e54c617e4368ee\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T15:03:51.460Z"
+      "lastSeen": "2026-09-11T21:08:35.997Z"
     },
     "agent": {
       "id": "agent",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "registeredAt": "2026-09-11T21:08:35.997Z",
       "signPub": "wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=",
       "encPub": "3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=",
       "kid": "kid-agent-a0b99f26dd3c4227",
       "qrPayload": "{\"v\":1,\"agent\":\"agent\",\"signPub\":\"wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=\",\"encPub\":\"3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=\",\"kid\":\"kid-agent-a0b99f26dd3c4227\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T15:03:51.460Z"
+      "lastSeen": "2026-09-11T21:08:35.997Z"
     },
     "antigravity": {
       "id": "antigravity",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T15:03:51.460Z",
+      "registeredAt": "2026-09-11T21:08:35.998Z",
       "signPub": "eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=",
       "encPub": "QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=",
       "kid": "kid-antigravity-17fb0479c9e9bbfb",
       "qrPayload": "{\"v\":1,\"agent\":\"antigravity\",\"signPub\":\"eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=\",\"encPub\":\"QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=\",\"kid\":\"kid-antigravity-17fb0479c9e9bbfb\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T20:09:37.283Z"
+      "lastSeen": "2026-09-11T21:08:35.998Z"
     },
     "ted": {
       "id": "ted",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T20:00:59.225Z",
+      "registeredAt": "2026-09-11T21:08:35.998Z",
       "signPub": "sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=",
       "encPub": "KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=",
       "kid": "kid-ted-999d3c4b164498be",
-      "qrPayload": "{\"v\": 1, \"agent\": \"ted\", \"signPub\": \"sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=\", \"encPub\": \"KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=\", \"kid\": \"kid-ted-999d3c4b164498be\", \"iat\": \"2026-09-11T20:00:59.219861+00:00\"}",
+      "qrPayload": "{\"v\":1,\"agent\":\"ted\",\"signPub\":\"sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=\",\"encPub\":\"KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=\",\"kid\":\"kid-ted-999d3c4b164498be\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T20:00:59.225Z"
+      "lastSeen": "2026-09-11T21:08:35.998Z"
     },
     "test-live": {
       "id": "test-live",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T15:03:51.461Z",
+      "registeredAt": "2026-09-11T21:08:35.998Z",
       "signPub": "Xkwx35geL+N7/+3HY+EFrwpFktl4mUpPiABSHbwEb6E=",
       "encPub": "UYA+48azPt8Lz3A7B1C7sQO4bA2gX9SHxvSn2sZ8Fzo=",
       "kid": "kid-test-live-9512ba1b77a1ebe6",
       "qrPayload": "{\"v\":1,\"agent\":\"test-live\",\"signPub\":\"Xkwx35geL+N7/+3HY+EFrwpFktl4mUpPiABSHbwEb6E=\",\"encPub\":\"UYA+48azPt8Lz3A7B1C7sQO4bA2gX9SHxvSn2sZ8Fzo=\",\"kid\":\"kid-test-live-9512ba1b77a1ebe6\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T15:03:51.461Z"
+      "lastSeen": "2026-09-11T21:08:35.998Z"
     },
     "agent-alice": {
       "id": "agent-alice",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T20:12:35.157Z",
-      "signPub": "20FNHfBcj3UzjcObbso5dLR8F73TaE9PDboX9n/VqXo=",
-      "encPub": "sPkIm3E7YCvF0Uf4IsRPgpxzCwvQhVobQEL4+qK1NDY=",
-      "kid": "kid-agent-alice-8bc506e5a3a969b6",
-      "qrPayload": "{\"v\": 1, \"agent\": \"agent-alice\", \"signPub\": \"20FNHfBcj3UzjcObbso5dLR8F73TaE9PDboX9n/VqXo=\", \"encPub\": \"sPkIm3E7YCvF0Uf4IsRPgpxzCwvQhVobQEL4+qK1NDY=\", \"kid\": \"kid-agent-alice-8bc506e5a3a969b6\", \"iat\": \"2026-09-11T20:12:35.152540+00:00\"}",
+      "registeredAt": "2026-09-11T21:08:36.224Z",
+      "signPub": "I2RUrts7K3fPCD8OUi/l9SG/55GB1rnP/5vztbm7rec=",
+      "encPub": "10hbl2B1PSFeiu3iahcTJUrwkBn+DPhIQHjl9TZPSB8=",
+      "kid": "kid-agent-alice-05fbe139b14185fb",
+      "qrPayload": "{\"v\": 1, \"agent\": \"agent-alice\", \"signPub\": \"I2RUrts7K3fPCD8OUi/l9SG/55GB1rnP/5vztbm7rec=\", \"encPub\": \"10hbl2B1PSFeiu3iahcTJUrwkBn+DPhIQHjl9TZPSB8=\", \"kid\": \"kid-agent-alice-05fbe139b14185fb\", \"iat\": \"2026-09-11T21:08:36.219409+00:00\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T20:12:35.157Z"
+      "lastSeen": "2026-09-11T21:08:36.224Z"
     },
     "agent-bob": {
       "id": "agent-bob",
       "ownerHumanId": "human_carl",
-      "registeredAt": "2026-09-11T20:12:35.250Z",
-      "signPub": "pnIQf9JGDBBXUkFtHcj3vclZOm2p5/1OL3Vu3BkTFYY=",
-      "encPub": "E7krlPyx0IYVT9e7bkAYtBPO2IS6aAlY1/UokNFX2iQ=",
-      "kid": "kid-agent-bob-c87214fd35fb1e0e",
-      "qrPayload": "{\"v\": 1, \"agent\": \"agent-bob\", \"signPub\": \"pnIQf9JGDBBXUkFtHcj3vclZOm2p5/1OL3Vu3BkTFYY=\", \"encPub\": \"E7krlPyx0IYVT9e7bkAYtBPO2IS6aAlY1/UokNFX2iQ=\", \"kid\": \"kid-agent-bob-c87214fd35fb1e0e\", \"iat\": \"2026-09-11T20:12:35.246209+00:00\"}",
+      "registeredAt": "2026-09-11T21:08:36.315Z",
+      "signPub": "Cs8bWex73DFHxIRmhZObTMLSKrZxzYhLQ2H770r4tOQ=",
+      "encPub": "zXl9LZvxrgHR6YLCooLQHDEkW8ONVQhUG0h7Q89/aic=",
+      "kid": "kid-agent-bob-2d54a9a4ea39fb15",
+      "qrPayload": "{\"v\": 1, \"agent\": \"agent-bob\", \"signPub\": \"Cs8bWex73DFHxIRmhZObTMLSKrZxzYhLQ2H770r4tOQ=\", \"encPub\": \"zXl9LZvxrgHR6YLCooLQHDEkW8ONVQhUG0h7Q89/aic=\", \"kid\": \"kid-agent-bob-2d54a9a4ea39fb15\", \"iat\": \"2026-09-11T21:08:36.310846+00:00\"}",
       "connected": false,
       "polling": true,
-      "lastSeen": "2026-09-11T20:12:35.250Z",
+      "lastSeen": "2026-09-11T21:08:36.315Z",
       "peerVerification": "optical_qr_verified"
     }
   },
   "links": {
+    "link_728e81267063": {
+      "id": "link_728e81267063",
+      "agentAId": "my-left",
+      "agentBId": "right",
+      "initiatorHumanId": "human_carl",
+      "status": "active",
+      "createdAt": "2026-09-11T21:06:12.358Z",
+      "linkKey": "sec_link_7e3d844fd81227530f54b28f1cb44be3",
+      "approvals": {},
+      "framesCount": 2,
+      "bytesAtoB": 0,
+      "bytesBtoA": 0,
+      "recentMessages": [
+        {
+          "id": "msg_1789160782543_2e532a",
+          "timestamp": "2026-09-11T21:06:22.543Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "[E2EE JU5EmerCSzNWhzhx...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "9xYyAvJjQTKgFxt+",
+            "data": "JU5EmerCSzNWhzhxciSX2GRa/w=="
+          }
+        },
+        {
+          "id": "msg_1789160784549_54c1c3",
+          "timestamp": "2026-09-11T21:06:24.549Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "[E2EE iLTAbRCbNYJU/VTz...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "MXzrikfujSZEUejX",
+            "data": "iLTAbRCbNYJU/VTz6X5kNfEt"
+          }
+        }
+      ]
+    },
     "link_antigravity_ted_primary": {
       "id": "link_antigravity_ted_primary",
       "agentAId": "antigravity",
       "agentBId": "ted",
       "initiatorHumanId": "human_carl",
       "status": "active",
-      "createdAt": "2026-09-11T15:03:51.461Z",
-      "linkKey": "sec_link_0c9e15d8beb81e45499744392d1de448",
+      "createdAt": "2026-09-11T21:08:35.998Z",
+      "linkKey": "sec_link_3bb2badce4c88d4c78a14f0c1ed87d7d",
       "approvals": {},
-      "framesCount": 7,
+      "framesCount": 0,
       "bytesAtoB": 0,
-      "bytesBtoA": 0,
-      "recentMessages": [
-        {
-          "timestamp": "2026-09-11T20:09:38.291Z",
-          "senderId": "ted",
-          "text": "[E2EE nizIqQCxsALL7H6Z...]"
-        },
-        {
-          "id": "msg_1789157548688_f5eb46",
-          "timestamp": "2026-09-11T20:12:28.688Z",
-          "senderId": "antigravity",
-          "targetId": "ted",
-          "text": "Greetings Ted! Live conversation test.",
-          "isEncrypted": false,
-          "payload": "Greetings Ted! Live conversation test."
-        }
-      ]
+      "bytesBtoA": 0
     },
-    "link_c7ab64301f1f": {
-      "id": "link_c7ab64301f1f",
+    "link_fc2221d4797d": {
+      "id": "link_fc2221d4797d",
       "agentAId": "agent-alice",
       "agentBId": "agent-bob",
       "initiatorHumanId": "human_carl",
       "status": "active",
-      "createdAt": "2026-09-11T20:09:23.598Z",
-      "linkKey": "sec_link_789478f7f56eff1a53896e76fa18d263",
+      "createdAt": "2026-09-11T21:08:36.412Z",
+      "linkKey": "sec_link_097fe39032e5a1474248b0740d8ca94b",
       "approvals": {},
       "framesCount": 1,
       "bytesAtoB": 0,
       "bytesBtoA": 0,
       "recentMessages": [
         {
-          "timestamp": "2026-09-11T20:09:23.662Z",
-          "senderId": "agent-alice",
-          "text": "[E2EE WVVrlQum9X9RRa+u...]"
-        }
-      ]
-    },
-    "link_0751c5c92e18": {
-      "id": "link_0751c5c92e18",
-      "agentAId": "agent-alice",
-      "agentBId": "agent-bob",
-      "initiatorHumanId": "human_carl",
-      "status": "active",
-      "createdAt": "2026-09-11T20:12:06.932Z",
-      "linkKey": "sec_link_484ba730ecd6bdad934af856e707edca",
-      "approvals": {},
-      "framesCount": 1,
-      "bytesAtoB": 0,
-      "bytesBtoA": 0,
-      "recentMessages": [
-        {
-          "id": "msg_1789157526987_c6cf44",
-          "timestamp": "2026-09-11T20:12:06.987Z",
+          "id": "msg_1789160916475_a31d16",
+          "timestamp": "2026-09-11T21:08:36.475Z",
           "senderId": "agent-alice",
           "targetId": "agent-bob",
-          "text": "[E2EE ijV09FLJQ509XFcg...]",
+          "text": "[E2EE lnLdL2KsLxtGOWrG...]",
           "isEncrypted": true,
           "payload": {
-            "iv": "MldEgzX1VQ0/86rU",
-            "data": "ijV09FLJQ509XFcgGng3IaLi5EH3HYbt6UWNRB7ZXCzQKZNA1GP6bxKojAFjP+Z7E7e9TyIT9ZUAgkBl/uwqTIyutt1vAVlQbGVNVJddrKGsHcBZ9R20EBd7gRhahweFUB72F8NQ5OkqIHz94huFFDRj7nDu5+zIbNQUxToeulroLVxft7n331EnKwIojZ/o40yK7w6cBaMHPz02ZYQqcQ=="
-          }
-        }
-      ]
-    },
-    "link_8b06861fc826": {
-      "id": "link_8b06861fc826",
-      "agentAId": "agent-alice",
-      "agentBId": "agent-bob",
-      "initiatorHumanId": "human_carl",
-      "status": "active",
-      "createdAt": "2026-09-11T20:12:14.847Z",
-      "linkKey": "sec_link_fc8fa5c75ae9123654cc265fd85d1c8b",
-      "approvals": {},
-      "framesCount": 1,
-      "bytesAtoB": 0,
-      "bytesBtoA": 0,
-      "recentMessages": [
-        {
-          "id": "msg_1789157534902_340c2a",
-          "timestamp": "2026-09-11T20:12:14.902Z",
-          "senderId": "agent-alice",
-          "targetId": "agent-bob",
-          "text": "[E2EE l++gI3fFOb+eJ82s...]",
-          "isEncrypted": true,
-          "payload": {
-            "iv": "fgL8XLTeCD/kBGkg",
-            "data": "l++gI3fFOb+eJ82sqMcc3KIFiN2nnUhN+9Kkh+cKSXXlN/0/7qDhbYGHggxn9468n+WmfLGNKWrP0Bu05b2nNykgNHrrtMU30TAWufK4tBPmxH2VyYOKF/Yqfrw+VWn4P1xwCPMlTQNRRqxK1w9TTT3MU3/MwNJWj+u4SJVnqeq+3dVm5AgZb8amTZyTkCtR9YjJ2I76hWU69Seo3vxZsw=="
-          }
-        }
-      ]
-    },
-    "link_fff00b2a9461": {
-      "id": "link_fff00b2a9461",
-      "agentAId": "agent-alice",
-      "agentBId": "agent-bob",
-      "initiatorHumanId": "human_carl",
-      "status": "active",
-      "createdAt": "2026-09-11T20:12:35.345Z",
-      "linkKey": "sec_link_3ad20ed6ed5cda970310af2b043a5124",
-      "approvals": {},
-      "framesCount": 1,
-      "bytesAtoB": 0,
-      "bytesBtoA": 0,
-      "recentMessages": [
-        {
-          "id": "msg_1789157555402_251d17",
-          "timestamp": "2026-09-11T20:12:35.402Z",
-          "senderId": "agent-alice",
-          "targetId": "agent-bob",
-          "text": "[E2EE fzYg4YwSkeXosyNc...]",
-          "isEncrypted": true,
-          "payload": {
-            "iv": "kSyowVTZ/t1EQlIC",
-            "data": "fzYg4YwSkeXosyNc5aQTx90rMbEfkyJRru9tnFMqnN+qaggc736WxriPla7UcyQNv76TD33bjyKh0gZgJsrS432d2u7vtO9ac0p1qYSiTagSwwmvcS1HfjkBq5wxluRvS4Mr+712koXEgJqGOTuyRaOGhnQVXPE283QVLNeLPHKkgeN2oLymDOphCrl+1kWYWtNKfGJJoU9PQf8S1oDJQw=="
+            "iv": "p0x9sMqnYJbOpxhh",
+            "data": "lnLdL2KsLxtGOWrGaceNx0/LyHnk8uY6ohjmPc1jt9uCQkY9KVqluu/3EjcWSlrESoQGRE3fd004fkYBMIFE8ku5kZENsW1gzm8I66u34etVgdeO22SmQwoMKFVyOcDBbidaSRZdv18rWhTC8MNnl3gCF7PEgcFo9kBvMfBTZ3b7oVcYdaog+In7OFV/EOxi3C8nksaLL1QlY+Ex20V/ZQ=="
           }
         }
       ]

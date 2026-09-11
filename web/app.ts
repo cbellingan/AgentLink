@@ -540,13 +540,22 @@ formSendMessage?.addEventListener('submit', async (e) => {
 // 6. Link Conversation Flow Viewer Logic
 (window as any).openLinkConversationModal = async (linkId: string) => {
   currentConvoLinkId = linkId;
-  const link = activeLinks.get(linkId);
-  if (!link) return;
+  let link = activeLinks.get(linkId);
+  if (!link) {
+    link = {
+      id: linkId,
+      agentAId: 'Agent A',
+      agentBId: 'Agent B',
+      status: 'active',
+      framesCount: 0,
+      recentMessages: [],
+    };
+  }
 
   renderConversationModalHeader(link);
-  await refreshConversationFlow(linkId, true);
-
   linkConversationModal.classList.remove('hidden');
+
+  await refreshConversationFlow(linkId, true);
 
   // Poll for incoming frames every 2 seconds while modal is open
   if (convoPollTimer) clearInterval(convoPollTimer);
@@ -561,27 +570,31 @@ formSendMessage?.addEventListener('submit', async (e) => {
 };
 
 function renderConversationModalHeader(link: any) {
-  convoAgentA.textContent = link.agentAId;
-  convoAgentB.textContent = link.agentBId;
-  convoLinkId.textContent = link.id;
-  convoFramesCount.textContent = String(link.framesCount || 0);
+  if (convoAgentA) convoAgentA.textContent = link.agentAId || 'Agent A';
+  if (convoAgentB) convoAgentB.textContent = link.agentBId || 'Agent B';
+  if (convoLinkId) convoLinkId.textContent = link.id;
+  if (convoFramesCount) convoFramesCount.textContent = String(link.framesCount || 0);
 
   const isActive = link.status === 'active';
-  convoStatusBadge.className = `badge ${isActive ? 'badge-success' : 'badge-warning'}`;
-  convoStatusBadge.textContent = isActive ? '● Active' : '● Pending Approval';
+  if (convoStatusBadge) {
+    convoStatusBadge.className = `badge ${isActive ? 'badge-success' : 'badge-warning'}`;
+    convoStatusBadge.textContent = isActive ? '● Active' : '● Pending Approval';
+  }
 
-  flowAgentALabel.textContent = link.agentAId;
-  flowAgentBLabel.textContent = link.agentBId;
+  if (flowAgentALabel) flowAgentALabel.textContent = link.agentAId || 'Agent A';
+  if (flowAgentBLabel) flowAgentBLabel.textContent = link.agentBId || 'Agent B';
 
   const agentA = fleetAgents.get(link.agentAId);
   const agentB = fleetAgents.get(link.agentBId);
-  flowAgentAKid.textContent = agentA?.kid || 'registered';
-  flowAgentBKid.textContent = agentB?.kid || 'registered';
+  if (flowAgentAKid) flowAgentAKid.textContent = agentA?.kid || 'registered';
+  if (flowAgentBKid) flowAgentBKid.textContent = agentB?.kid || 'registered';
 
-  convoSenderSelect.innerHTML = `
-    <option value="${link.agentAId}">From: ${link.agentAId}</option>
-    <option value="${link.agentBId}">From: ${link.agentBId}</option>
-  `;
+  if (convoSenderSelect && link.agentAId && link.agentBId) {
+    convoSenderSelect.innerHTML = `
+      <option value="${link.agentAId}">From: ${link.agentAId}</option>
+      <option value="${link.agentBId}">From: ${link.agentBId}</option>
+    `;
+  }
 }
 
 async function refreshConversationFlow(linkId: string, autoScroll: boolean = true) {
@@ -591,7 +604,8 @@ async function refreshConversationFlow(linkId: string, autoScroll: boolean = tru
     if (!link) return;
 
     activeLinks.set(link.id, link);
-    convoFramesCount.textContent = String(link.framesCount || 0);
+    renderConversationModalHeader(link);
+    if (convoFramesCount) convoFramesCount.textContent = String(link.framesCount || 0);
 
     const msgs: any[] = link.recentMessages || [];
     if (msgs.length === 0) {
