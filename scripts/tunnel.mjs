@@ -1,41 +1,59 @@
 #!/usr/bin/env node
 /**
  * AgentLink Cloudflare Tunnel Runner
- * Spawns a secure Cloudflare Tunnel forwarding public traffic to http://localhost:3000.
+ * Spawns a secure Cloudflare Tunnel using your permanent Zero Trust tunnel token,
+ * or falls back to an ad-hoc quick tunnel.
  */
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 
+// Load .env if present
+try {
+  if (fs.existsSync('.env')) {
+    process.loadEnvFile('.env');
+  }
+} catch {}
+
+const token = process.env.CLOUDFLARE_TUNNEL_TOKEN || process.argv[2];
 const localPort = process.env.PORT || 3000;
 const localUrl = `http://localhost:${localPort}`;
 
 console.log('🌐 ========================================================');
-console.log(`🌐 Starting Cloudflare Tunnel pointing to ${localUrl}...`);
+if (token) {
+  console.log('🌐 Starting Cloudflare Named Tunnel with saved token...');
+} else {
+  console.log(`🌐 Starting Ad-Hoc Cloudflare Quick Tunnel pointing to ${localUrl}...`);
+}
 console.log('🌐 ========================================================\n');
 
-const child = spawn('cloudflared', ['tunnel', '--url', localUrl]);
+const args = token
+  ? ['tunnel', 'run', '--token', token]
+  : ['tunnel', '--url', localUrl];
 
-let tunnelUrlFound = false;
+const child = spawn('cloudflared', args);
 
-function processOutput(data) {
+child.stdout.on('data', (data) => {
   const text = data.toString();
-  // Match standard trycloudflare.com URL pattern
-  const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
-  if (match && !tunnelUrlFound) {
-    tunnelUrlFound = true;
-    const url = match[0];
-    console.log('🚀 ========================================================');
-    console.log(`🚀 CLOUDFLARE TUNNEL LIVE!`);
-    console.log(`🚀 Public HTTPS URL: \x1b[32m\x1b[1m${url}\x1b[0m`);
-    console.log('🚀 ========================================================');
-    console.log(`\nYour AgentLink server is now securely accessible worldwide.`);
-    console.log(`• Web Dashboard: ${url}`);
-    console.log(`• Connect Agents: python3 cli.py connect --server "${url}" --api-key <YOUR_KEY> --agent-id my-agent\n`);
-  }
-}
+  process.stdout.write(text);
+});
 
-child.stdout.on('data', processOutput);
-child.stderr.on('data', processOutput);
+child.stderr.on('data', (data) => {
+  const text = data.toString();
+  if (text.includes('Registered tunnel connection') || text.includes('Connection registered') || text.includes('Connected to ')) {
+    console.log('\n🚀 ========================================================');
+    console.log('🚀 CLOUDFLARE NAMED TUNNEL CONNECTED TO CLOUDFLARE EDGE!');
+    console.log('🚀 Routing remote requests to http://localhost:' + localPort);
+    console.log('🚀 ========================================================\n');
+  } else if (text.includes('trycloudflare.com')) {
+    const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+    if (match) {
+      console.log('\n🚀 Public HTTPS URL: ' + match[0]);
+    }
+  } else {
+    process.stderr.write(text);
+  }
+});
 
 child.on('close', (code) => {
   console.log(`\n[Cloudflare Tunnel] Process exited with code ${code}`);
