@@ -21,6 +21,13 @@ const BACKUP_DIR = path.join(ROOT_DIR, '.backup', 'current');
 const PID_FILE = path.join(ROOT_DIR, '.data', 'agentlink.pid');
 const LOG_FILE = path.join(ROOT_DIR, '.data', 'agentlink.log');
 
+// Load environment from .env if present
+try {
+  if (fs.existsSync(path.join(ROOT_DIR, '.env'))) {
+    process.loadEnvFile(path.join(ROOT_DIR, '.env'));
+  }
+} catch {}
+
 console.log('🚀 ========================================================');
 console.log('🚀 AgentLink Local CI/CD: Automated Deploy & Rollback');
 console.log('🚀 ========================================================\n');
@@ -110,6 +117,63 @@ function startServer() {
     throw new Error('Server failed to respond on http://localhost:3000 within 7 seconds');
   }
   console.log('   Server is live and accepting connections on port 3000');
+}
+
+function checkOrStartTunnel() {
+  console.log('   Checking Cloudflare Tunnel status...');
+  let isTunnelActive = false;
+  let haConnections = 0;
+
+  try {
+    const metrics = execSync('curl -s http://127.0.0.1:20241/metrics', { encoding: 'utf8' });
+    const match = metrics.match(/cloudflared_tunnel_ha_connections\s+(\d+)/);
+    if (match) {
+      haConnections = parseInt(match[1], 10);
+      if (haConnections > 0) isTunnelActive = true;
+    }
+  } catch {}
+
+  if (isTunnelActive) {
+    console.log(`   ✓ Cloudflare Named Tunnel is active with ${haConnections} redundant edge connections.`);
+    return;
+  }
+
+  const token = process.env.CLOUDFLARE_TUNNEL_TOKEN;
+  if (!token) {
+    console.log('   ℹ️ No CLOUDFLARE_TUNNEL_TOKEN found in .env; skipping tunnel auto-start.');
+    return;
+  }
+
+  console.log('   Starting Cloudflare Named Tunnel with saved Zero Trust token...');
+  const tunnelLog = path.join(ROOT_DIR, '.data', 'tunnel.log');
+  const outLog = fs.openSync(tunnelLog, 'a');
+  const errLog = fs.openSync(tunnelLog, 'a');
+
+  const child = spawn('cloudflared', ['tunnel', 'run', '--token', token], {
+    detached: true,
+    stdio: ['ignore', outLog, errLog],
+    cwd: ROOT_DIR,
+  });
+  child.unref();
+
+  const TUNNEL_PID_FILE = path.join(ROOT_DIR, '.data', 'tunnel.pid');
+  fs.writeFileSync(TUNNEL_PID_FILE, String(child.pid), 'utf8');
+  console.log(`   Spawned Cloudflare Tunnel daemon (PID: ${child.pid}). Waiting for edge registration...`);
+
+  const start = Date.now();
+  while (Date.now() - start < 10000) {
+    try {
+      const m = execSync('curl -s http://127.0.0.1:20241/metrics', { encoding: 'utf8' });
+      const mMatch = m.match(/cloudflared_tunnel_ha_connections\s+(\d+)/);
+      if (mMatch && parseInt(mMatch[1], 10) > 0) {
+        console.log(`   ✓ Cloudflare Tunnel connected! Active HA connections: ${mMatch[1]}`);
+        return;
+      }
+    } catch {}
+    execSync('sleep 0.5');
+  }
+
+  console.warn('   ⚠️ Cloudflare Tunnel process started, but edge connection confirmation timed out.');
 }
 
 function performRollback() {
@@ -215,6 +279,11 @@ async function main() {
     // 6. Synthetic Smoke Testing
     step('6. Post-Deployment Synthetic Smoke Testing', () => {
       execSync('node scripts/smoke-test.mjs http://localhost:3000', { stdio: 'inherit' });
+    });
+
+    // 7. Cloudflare Tunnel Health & Edge Routing
+    step('7. Cloudflare Tunnel Health & Edge Routing Verification', () => {
+      checkOrStartTunnel();
     });
 
     console.log('🎉 ========================================================');
