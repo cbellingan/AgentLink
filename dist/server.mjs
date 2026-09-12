@@ -200,6 +200,27 @@ var AgentLinkServer = class {
       }
     });
   }
+  sendJson(res, statusCode, data) {
+    try {
+      const jsonStr = JSON.stringify(data);
+      const buf = Buffer.from(jsonStr, "utf8");
+      res.writeHead(statusCode, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": buf.length,
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Token, X-Human-Id"
+      });
+      res.end(buf);
+    } catch (err) {
+      console.error("[sendJson] Serialization error:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      }
+      res.end(JSON.stringify({ error: "serialization_error", message: err?.message || "Could not serialize response" }));
+    }
+  }
   handleHttpRequest(req, res) {
     const startTime = Date.now();
     let securityNote;
@@ -239,563 +260,587 @@ var AgentLinkServer = class {
       return;
     }
     const parsedUrl = req.url ? req.url.split("?")[0] : "/";
-    const readJson = (callback) => {
-      let data = "";
-      req.on("data", (chunk) => {
-        data += chunk;
-      });
-      req.on("end", () => {
-        try {
-          callback(data ? JSON.parse(data) : {});
-        } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "invalid_json", message: "Malformed JSON payload" }));
-        }
-      });
-    };
-    if (req.method === "GET" && parsedUrl === "/api/server-info") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        name: "AgentLink Zero-Knowledge Relay",
-        version: "1.0.0",
-        adminEmail: this.adminEmail,
-        port: this.port
-      }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/auth/google") {
-      readJson((body) => {
-        let email = (body.email || "").trim().toLowerCase();
-        let name = (body.name || "Carl Bellingan").trim();
-        if (body.credential && typeof body.credential === "string") {
+    try {
+      const readJson = (callback) => {
+        let data = "";
+        req.on("data", (chunk) => {
+          data += chunk;
+        });
+        req.on("end", () => {
           try {
-            const parts = body.credential.split(".");
-            if (parts.length === 3) {
-              const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
-              if (payload.email) {
-                email = String(payload.email).trim().toLowerCase();
-              }
-              if (payload.name) {
-                name = String(payload.name).trim();
-              }
-            }
+            callback(data ? JSON.parse(data) : {});
           } catch {
+            this.sendJson(res, 400, { error: "invalid_json", message: "Malformed JSON payload" });
           }
-        }
-        if (email !== this.adminEmail) {
-          setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
-            error: "not_enabled",
-            message: "Not enabled right now"
-          }));
-          return;
-        }
-        const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
-        const user = {
-          id: "human_carl",
-          name: name || "Carl Bellingan",
-          email: this.adminEmail,
-          avatar: "\u{1F451}",
-          role: "admin"
-        };
-        this.humanSessions.set(token, user);
-        setSecurityNote(`SUCCESSFUL GOOGLE LOGIN for ${email}`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", authenticated: true, token, user }));
-      });
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/auth/login") {
-      readJson((body) => {
-        const email = (body.email || "").trim().toLowerCase();
-        const password = (body.password || body.credential || "").trim();
-        if (email !== this.adminEmail) {
-          setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
-            error: "not_enabled",
-            message: "Not enabled right now"
-          }));
-          return;
-        }
-        if (password !== this.adminPassword) {
-          setSecurityNote(`INVALID PASSWORD for ${email}`);
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "invalid_credentials", message: "Invalid password" }));
-          return;
-        }
-        const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
-        const user = {
-          id: "human_carl",
-          name: "Carl Bellingan",
-          email: this.adminEmail,
-          avatar: "\u{1F451}",
-          role: "admin"
-        };
-        this.humanSessions.set(token, user);
-        setSecurityNote(`SUCCESSFUL CREDENTIAL LOGIN for ${email}`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", authenticated: true, token, user }));
-      });
-      return;
-    }
-    if (req.method === "GET" && parsedUrl === "/api/auth/me") {
-      const user = this.getAuthenticatedHuman(req);
-      if (!user) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "unauthorized", message: "No active session" }));
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", user }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/auth/logout") {
-      const token = this.extractToken(req);
-      if (token) this.humanSessions.delete(token);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", loggedOut: true }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/admin/clean-slate") {
-      const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== "admin") {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
-        return;
-      }
-      readJson((body) => {
-        const mode = body.mode || "test_artifacts";
-        let removedKeys = 0;
-        let removedAgents = 0;
-        let removedLinks = 0;
-        if (mode === "all") {
-          removedKeys = this.apiKeys.size;
-          removedAgents = this.agents.size;
-          removedLinks = this.links.size;
-          this.apiKeys.clear();
-          this.agents.clear();
-          this.links.clear();
-          this.messageQueues.clear();
-          this.pollWaiters.clear();
-          const defaultKeyVal = "sec_apk_carl_fleet_primary";
-          this.apiKeys.set(defaultKeyVal, {
-            id: "key_primary_default",
-            key: defaultKeyVal,
-            ownerHumanId: "human_carl",
-            label: "Primary Fleet Key (Carl Bellingan)",
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
-        } else {
-          const isTestIdentifier = (id, label) => {
-            const s = `${id} ${label || ""}`.toLowerCase();
-            return s.includes("test") || s.includes("alice") || s.includes("bob");
-          };
-          for (const [k, keyRec] of Array.from(this.apiKeys.entries())) {
-            if (k === "sec_apk_carl_fleet_primary") continue;
-            if (isTestIdentifier(keyRec.id, keyRec.label) || isTestIdentifier(keyRec.key, keyRec.label)) {
-              this.apiKeys.delete(k);
-              removedKeys++;
-            }
-          }
-          const removedAgentIds = /* @__PURE__ */ new Set();
-          for (const [agentId] of Array.from(this.agents.entries())) {
-            if (isTestIdentifier(agentId)) {
-              this.agents.delete(agentId);
-              this.messageQueues.delete(agentId);
-              this.pollWaiters.delete(agentId);
-              removedAgentIds.add(agentId);
-              removedAgents++;
-            }
-          }
-          for (const [linkId, linkRec] of Array.from(this.links.entries())) {
-            if (removedAgentIds.has(linkRec.agentAId) || removedAgentIds.has(linkRec.agentBId) || isTestIdentifier(linkRec.id) || isTestIdentifier(linkRec.agentAId) || isTestIdentifier(linkRec.agentBId)) {
-              this.links.delete(linkId);
-              removedLinks++;
-            }
-          }
-        }
-        this.saveState();
-        this.notifySupervisors({ type: "clean_slate", mode, removedKeys, removedAgents, removedLinks });
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          status: "ok",
-          mode,
-          removedKeys,
-          removedAgents,
-          removedLinks,
-          remainingAgents: this.agents.size,
-          remainingKeys: this.apiKeys.size,
-          remainingLinks: this.links.size
-        }));
-      });
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/keys/generate") {
-      const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== "admin") {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
-        return;
-      }
-      readJson((body) => {
-        const keyVal = `sec_apk_${crypto.randomBytes(32).toString("hex")}`;
-        const keyRecord = {
-          id: `key_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
-          key: keyVal,
-          ownerHumanId: human.id,
-          label: body.label || `Agent Key (${(/* @__PURE__ */ new Date()).toLocaleDateString()})`,
-          createdAt: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        this.apiKeys.set(keyVal, keyRecord);
-        this.saveState();
-        setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
-        res.writeHead(201, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", apiKey: keyRecord }));
-      });
-      return;
-    }
-    if (req.method === "GET" && parsedUrl === "/api/keys") {
-      const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== "admin") {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
-        return;
-      }
-      const keysList = Array.from(this.apiKeys.values()).map((k) => ({
-        id: k.id,
-        keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
-        key: k.key,
-        label: k.label,
-        createdAt: k.createdAt,
-        lastUsedAt: k.lastUsedAt
-      }));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", keys: keysList }));
-      return;
-    }
-    if (req.method === "DELETE" && parsedUrl.startsWith("/api/keys/")) {
-      const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== "admin") {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
-        return;
-      }
-      const keyId = parsedUrl.replace("/api/keys/", "").trim();
-      let deleted = false;
-      for (const [k, record] of this.apiKeys.entries()) {
-        if (record.id === keyId || record.key === keyId) {
-          this.apiKeys.delete(k);
-          deleted = true;
-          break;
-        }
-      }
-      if (deleted) this.saveState();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", deleted }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/agents/register") {
-      readJson((body) => {
-        const token = this.extractToken(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
-        const isAdmin = Boolean(token && this.humanSessions.get(token)?.role === "admin");
-        if (!apiKeyRecord && !isAdmin && token !== "sec_apk_valid_12345") {
-          setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key`);
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
-            error: "invalid_api_key",
-            message: "Valid AgentLink API key required for registration"
-          }));
-          return;
-        }
-        if (apiKeyRecord) {
-          apiKeyRecord.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
-        }
-        const agentId = body.id || `agent_${crypto.randomBytes(4).toString("hex")}`;
-        const agentRecord = {
-          id: agentId,
-          ownerHumanId: "human_carl",
-          registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
-          signPub: body.signPub,
-          encPub: body.encPub,
-          kid: body.kid,
-          qrPayload: body.qrPayload,
-          connected: false,
-          polling: true,
-          lastSeen: (/* @__PURE__ */ new Date()).toISOString()
-        };
-        this.agents.set(agentId, agentRecord);
-        if (!this.messageQueues.has(agentId)) {
-          this.messageQueues.set(agentId, []);
-        }
-        this.saveState();
-        setSecurityNote(`AGENT REGISTERED: ${agentId} bound to Carl's fleet`);
-        this.notifySupervisors({ type: "agent_registered", agent: agentRecord });
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          status: "ok",
-          agentId: agentRecord.id,
-          pollUrl: `/api/agents/${agentRecord.id}/poll`,
-          registeredAt: agentRecord.registeredAt
-        }));
-      });
-      return;
-    }
-    if (req.method === "GET" && parsedUrl === "/api/agents") {
-      const list = Array.from(this.agents.values()).map((a) => ({
-        ...a,
-        relationship: "owned"
-      }));
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", agents: list }));
-      return;
-    }
-    if (req.method === "DELETE" && parsedUrl.startsWith("/api/agents/")) {
-      const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== "admin") {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
-        return;
-      }
-      const agentId = parsedUrl.replace("/api/agents/", "").trim();
-      const existed = this.agents.delete(agentId);
-      this.messageQueues.delete(agentId);
-      this.pollWaiters.delete(agentId);
-      let removedLinksCount = 0;
-      for (const [linkId, link] of Array.from(this.links.entries())) {
-        if (link.agentAId === agentId || link.agentBId === agentId) {
-          this.links.delete(linkId);
-          removedLinksCount++;
-        }
-      }
-      if (existed || removedLinksCount > 0) {
-        this.saveState();
-        this.notifySupervisors({ type: "agent_deregistered", agentId, removedLinksCount });
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", deregistered: existed, removedLinks: removedLinksCount }));
-      return;
-    }
-    if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll")) {
-      const parts = parsedUrl.split("/");
-      const agentId = parts[3];
-      const agent = this.agents.get(agentId);
-      if (agent) {
-        agent.polling = true;
-        agent.lastSeen = (/* @__PURE__ */ new Date()).toISOString();
-      }
-      let timeoutMs = 15e3;
-      if (req.url && req.url.includes("?")) {
-        const query = new URLSearchParams(req.url.split("?")[1]);
-        const t = parseInt(query.get("timeout") || "15000", 10);
-        if (!isNaN(t) && t > 0) {
-          timeoutMs = Math.min(t, 6e4);
-        }
-      }
-      const q = this.messageQueues.get(agentId) || [];
-      if (q.length > 0) {
-        const msgs = [...q];
-        q.length = 0;
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ messages: msgs }));
-        return;
-      }
-      let waiters = this.pollWaiters.get(agentId);
-      if (!waiters) {
-        waiters = [];
-        this.pollWaiters.set(agentId, waiters);
-      }
-      let active = true;
-      const resolver = (msgs) => {
-        if (!active) return false;
-        active = false;
-        clearTimeout(timer);
-        const idx = waiters.indexOf(resolver);
-        if (idx !== -1) waiters.splice(idx, 1);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ messages: msgs }));
-        return true;
+        });
       };
-      const timer = setTimeout(() => {
-        if (!active) return;
-        active = false;
-        const idx = waiters.indexOf(resolver);
-        if (idx !== -1) waiters.splice(idx, 1);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ messages: [] }));
-      }, timeoutMs);
-      req.on("close", () => {
-        if (!active) return;
-        active = false;
-        clearTimeout(timer);
-        const idx = waiters.indexOf(resolver);
-        if (idx !== -1) waiters.splice(idx, 1);
-      });
-      waiters.push(resolver);
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/links/request") {
-      readJson((body) => {
-        const linkId = `link_${crypto.randomBytes(6).toString("hex")}`;
-        const record = {
-          id: linkId,
-          agentAId: body.agentAId,
-          agentBId: body.agentBId,
-          initiatorHumanId: body.initiatorHumanId || "human_carl",
-          responderHumanId: body.responderHumanId,
-          status: "pending_approval",
-          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
-          approvals: {},
-          framesCount: 0,
-          bytesAtoB: 0,
-          bytesBtoA: 0
-        };
-        this.links.set(linkId, record);
-        this.saveState();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", linkId: record.id, link: record }));
-      });
-      return;
-    }
-    if (req.method === "GET" && parsedUrl === "/api/links") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", links: Array.from(this.links.values()) }));
-      return;
-    }
-    if (req.method === "GET" && parsedUrl.startsWith("/api/links/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/approve") && !parsedUrl.endsWith("/send") && !parsedUrl.endsWith("/message")) {
-      const linkId = parsedUrl.replace("/api/links/", "").trim();
-      const link = this.links.get(linkId);
-      if (!link) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "link_not_found" }));
+      if (req.method === "GET" && parsedUrl === "/api/server-info") {
+        this.sendJson(res, 200, {
+          name: "AgentLink Zero-Knowledge Relay",
+          version: "1.0.0",
+          adminEmail: this.adminEmail,
+          port: this.port
+        });
         return;
       }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", link }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && parsedUrl.endsWith("/approve")) {
-      const parts = parsedUrl.split("/");
-      const linkId = parts[3];
-      const link = this.links.get(linkId);
-      if (!link) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "link_not_found" }));
-        return;
-      }
-      readJson((body) => {
-        link.status = "active";
-        if (body.peerVerification) {
-          const targetAgent = this.agents.get(link.agentBId);
-          if (targetAgent) targetAgent.peerVerification = body.peerVerification;
-        }
-        this.saveState();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", linkId: link.id, link }));
-      });
-      return;
-    }
-    if (req.method === "DELETE" && parsedUrl.startsWith("/api/links/")) {
-      const linkId = parsedUrl.replace("/api/links/", "").trim();
-      const existed = this.links.delete(linkId);
-      if (existed) this.saveState();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", severed: existed }));
-      return;
-    }
-    if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message"))) {
-      const parts = parsedUrl.split("/");
-      const linkId = parts[3];
-      const link = this.links.get(linkId);
-      readJson((body) => {
-        const senderId = body.senderId;
-        const targetId = senderId === link?.agentAId ? link?.agentBId : senderId === link?.agentBId ? link?.agentAId : void 0;
-        if (targetId) {
-          if (link) {
-            link.framesCount = (link.framesCount || 0) + 1;
-            if (!link.recentMessages) link.recentMessages = [];
-            const isEnc = typeof body.payload === "object" && body.payload !== null && Boolean(body.payload.data);
-            const previewText = typeof body.payload === "string" ? body.payload : isEnc ? `[E2EE ${body.payload.data.slice(0, 16)}...]` : "[E2EE Encrypted Payload]";
-            link.recentMessages.push({
-              id: `msg_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
-              timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-              senderId,
-              targetId,
-              text: previewText,
-              isEncrypted: isEnc,
-              payload: body.payload
-            });
-            if (link.recentMessages.length > 100) link.recentMessages.shift();
-            this.saveState();
-          }
-          const senderAgent = this.agents.get(senderId);
-          const q = this.messageQueues.get(targetId) || [];
-          this.messageQueues.set(targetId, q);
-          q.push({
-            linkId,
-            senderId,
-            senderEncPub: senderAgent?.encPub,
-            senderSignPub: senderAgent?.signPub,
-            senderKid: senderAgent?.kid,
-            payload: body.payload,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          const waiters = this.pollWaiters.get(targetId) || [];
-          while (waiters.length > 0 && q.length > 0) {
-            const resolver = waiters[0];
-            const msgs = [...q];
-            q.length = 0;
-            const delivered = resolver(msgs);
-            if (!delivered) {
-              q.unshift(...msgs);
+      if (req.method === "POST" && parsedUrl === "/api/auth/google") {
+        readJson((body) => {
+          let email = (body.email || "").trim().toLowerCase();
+          let name = (body.name || "Carl Bellingan").trim();
+          if (body.credential && typeof body.credential === "string") {
+            try {
+              const parts = body.credential.split(".");
+              if (parts.length === 3) {
+                const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+                if (payload.email) {
+                  email = String(payload.email).trim().toLowerCase();
+                }
+                if (payload.name) {
+                  name = String(payload.name).trim();
+                }
+              }
+            } catch {
             }
           }
+          if (email !== this.adminEmail) {
+            setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              error: "not_enabled",
+              message: "Not enabled right now"
+            }));
+            return;
+          }
+          const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+          const user = {
+            id: "human_carl",
+            name: name || "Carl Bellingan",
+            email: this.adminEmail,
+            avatar: "\u{1F451}",
+            role: "admin"
+          };
+          this.humanSessions.set(token, user);
+          setSecurityNote(`SUCCESSFUL GOOGLE LOGIN for ${email}`);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok", authenticated: true, token, user }));
+        });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/auth/login") {
+        readJson((body) => {
+          const email = (body.email || "").trim().toLowerCase();
+          const password = (body.password || body.credential || "").trim();
+          if (email !== this.adminEmail) {
+            setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              error: "not_enabled",
+              message: "Not enabled right now"
+            }));
+            return;
+          }
+          if (password !== this.adminPassword) {
+            setSecurityNote(`INVALID PASSWORD for ${email}`);
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "invalid_credentials", message: "Invalid password" }));
+            return;
+          }
+          const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+          const user = {
+            id: "human_carl",
+            name: "Carl Bellingan",
+            email: this.adminEmail,
+            avatar: "\u{1F451}",
+            role: "admin"
+          };
+          this.humanSessions.set(token, user);
+          setSecurityNote(`SUCCESSFUL CREDENTIAL LOGIN for ${email}`);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok", authenticated: true, token, user }));
+        });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl === "/api/auth/me") {
+        const user = this.getAuthenticatedHuman(req);
+        if (!user) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized", message: "No active session" }));
+          return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", delivered: Boolean(targetId) }));
-      });
-      return;
-    }
-    if (req.method === "POST" && parsedUrl === "/api/telemetry") {
-      readJson((body) => {
-        const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress || "127.0.0.1";
-        const userAgent = req.headers["user-agent"] || "";
-        const level = body.level || "info";
-        const category = body.category || "client";
-        const message = body.message || "Client event";
-        const details = body.details || void 0;
-        const entry = {
-          id: `clog_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-          level,
-          category,
-          message,
-          details,
-          userAgent,
-          ip
-        };
-        this.clientLogs.push(entry);
-        if (this.clientLogs.length > 500) this.clientLogs.shift();
-        const levelEmoji = level === "error" ? "\u{1F4A5}" : level === "warn" ? "\u26A0\uFE0F" : "\u2139\uFE0F";
-        console.log(`[CLIENT-LOG] ${entry.timestamp} ${levelEmoji} [${category}] ${message} ${details ? JSON.stringify(details) : ""}`);
+        res.end(JSON.stringify({ status: "ok", user }));
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/auth/logout") {
+        const token = this.extractToken(req);
+        if (token) this.humanSessions.delete(token);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok", received: true, id: entry.id }));
-      });
-      return;
+        res.end(JSON.stringify({ status: "ok", loggedOut: true }));
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/admin/clean-slate") {
+        const human = this.getAuthenticatedHuman(req);
+        if (!human || human.role !== "admin") {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+          return;
+        }
+        readJson((body) => {
+          const mode = body.mode || "test_artifacts";
+          let removedKeys = 0;
+          let removedAgents = 0;
+          let removedLinks = 0;
+          if (mode === "all") {
+            removedKeys = this.apiKeys.size;
+            removedAgents = this.agents.size;
+            removedLinks = this.links.size;
+            this.apiKeys.clear();
+            this.agents.clear();
+            this.links.clear();
+            this.messageQueues.clear();
+            this.pollWaiters.clear();
+            const defaultKeyVal = "sec_apk_carl_fleet_primary";
+            this.apiKeys.set(defaultKeyVal, {
+              id: "key_primary_default",
+              key: defaultKeyVal,
+              ownerHumanId: "human_carl",
+              label: "Primary Fleet Key (Carl Bellingan)",
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          } else {
+            const isTestIdentifier = (id, label) => {
+              const s = `${id} ${label || ""}`.toLowerCase();
+              return s.includes("test") || s.includes("alice") || s.includes("bob");
+            };
+            for (const [k, keyRec] of Array.from(this.apiKeys.entries())) {
+              if (k === "sec_apk_carl_fleet_primary") continue;
+              if (isTestIdentifier(keyRec.id, keyRec.label) || isTestIdentifier(keyRec.key, keyRec.label)) {
+                this.apiKeys.delete(k);
+                removedKeys++;
+              }
+            }
+            const removedAgentIds = /* @__PURE__ */ new Set();
+            for (const [agentId] of Array.from(this.agents.entries())) {
+              if (isTestIdentifier(agentId)) {
+                this.agents.delete(agentId);
+                this.messageQueues.delete(agentId);
+                this.pollWaiters.delete(agentId);
+                removedAgentIds.add(agentId);
+                removedAgents++;
+              }
+            }
+            for (const [linkId, linkRec] of Array.from(this.links.entries())) {
+              if (removedAgentIds.has(linkRec.agentAId) || removedAgentIds.has(linkRec.agentBId) || isTestIdentifier(linkRec.id) || isTestIdentifier(linkRec.agentAId) || isTestIdentifier(linkRec.agentBId)) {
+                this.links.delete(linkId);
+                removedLinks++;
+              }
+            }
+          }
+          this.saveState();
+          this.notifySupervisors({ type: "clean_slate", mode, removedKeys, removedAgents, removedLinks });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            status: "ok",
+            mode,
+            removedKeys,
+            removedAgents,
+            removedLinks,
+            remainingAgents: this.agents.size,
+            remainingKeys: this.apiKeys.size,
+            remainingLinks: this.links.size
+          }));
+        });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/keys/generate") {
+        const human = this.getAuthenticatedHuman(req);
+        if (!human || human.role !== "admin") {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+          return;
+        }
+        readJson((body) => {
+          const keyVal = `sec_apk_${crypto.randomBytes(32).toString("hex")}`;
+          const keyRecord = {
+            id: `key_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+            key: keyVal,
+            ownerHumanId: human.id,
+            label: body.label || `Agent Key (${(/* @__PURE__ */ new Date()).toLocaleDateString()})`,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          this.apiKeys.set(keyVal, keyRecord);
+          this.saveState();
+          setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
+          res.writeHead(201, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok", apiKey: keyRecord }));
+        });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl === "/api/keys") {
+        const human = this.getAuthenticatedHuman(req);
+        if (!human || human.role !== "admin") {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+          return;
+        }
+        const keysList = Array.from(this.apiKeys.values()).map((k) => ({
+          id: k.id,
+          keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
+          key: k.key,
+          label: k.label,
+          createdAt: k.createdAt,
+          lastUsedAt: k.lastUsedAt
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", keys: keysList }));
+        return;
+      }
+      if (req.method === "DELETE" && parsedUrl.startsWith("/api/keys/")) {
+        const human = this.getAuthenticatedHuman(req);
+        if (!human || human.role !== "admin") {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+          return;
+        }
+        const keyId = parsedUrl.replace("/api/keys/", "").trim();
+        let deleted = false;
+        for (const [k, record] of this.apiKeys.entries()) {
+          if (record.id === keyId || record.key === keyId) {
+            this.apiKeys.delete(k);
+            deleted = true;
+            break;
+          }
+        }
+        if (deleted) this.saveState();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", deleted }));
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/agents/register") {
+        readJson((body) => {
+          const token = this.extractToken(req);
+          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const isAdmin = Boolean(token && this.humanSessions.get(token)?.role === "admin");
+          if (!apiKeyRecord && !isAdmin && token !== "sec_apk_valid_12345") {
+            setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key`);
+            this.sendJson(res, 401, {
+              error: "invalid_api_key",
+              message: "Valid AgentLink API key required for registration"
+            });
+            return;
+          }
+          if (apiKeyRecord) {
+            apiKeyRecord.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
+          }
+          const agentId = body.id || `agent_${crypto.randomBytes(4).toString("hex")}`;
+          const agentRecord = {
+            id: agentId,
+            ownerHumanId: "human_carl",
+            registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
+            signPub: body.signPub,
+            encPub: body.encPub,
+            kid: body.kid,
+            qrPayload: body.qrPayload,
+            connected: false,
+            polling: true,
+            lastSeen: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          this.agents.set(agentId, agentRecord);
+          if (!this.messageQueues.has(agentId)) {
+            this.messageQueues.set(agentId, []);
+          }
+          this.saveState();
+          setSecurityNote(`AGENT REGISTERED: ${agentId} bound to Carl's fleet`);
+          this.notifySupervisors({ type: "agent_registered", agent: agentRecord });
+          this.sendJson(res, 200, {
+            status: "ok",
+            agentId: agentRecord.id,
+            pollUrl: `/api/agents/${agentRecord.id}/poll`,
+            registeredAt: agentRecord.registeredAt
+          });
+        });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl === "/api/agents") {
+        const list = Array.from(this.agents.values()).map((a) => ({
+          ...a,
+          relationship: "owned"
+        }));
+        this.sendJson(res, 200, { status: "ok", agents: list });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/links")) {
+        const agentId = parsedUrl.replace("/api/agents/", "").trim();
+        const agent = this.agents.get(agentId);
+        if (!agent) {
+          this.sendJson(res, 404, { error: "agent_not_found", message: `Agent '${agentId}' not found` });
+          return;
+        }
+        this.sendJson(res, 200, { status: "ok", agent: { ...agent, relationship: "owned" } });
+        return;
+      }
+      if (req.method === "DELETE" && parsedUrl.startsWith("/api/agents/")) {
+        const human = this.getAuthenticatedHuman(req);
+        if (!human || human.role !== "admin") {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+          return;
+        }
+        const agentId = parsedUrl.replace("/api/agents/", "").trim();
+        const existed = this.agents.delete(agentId);
+        this.messageQueues.delete(agentId);
+        this.pollWaiters.delete(agentId);
+        let removedLinksCount = 0;
+        for (const [linkId, link] of Array.from(this.links.entries())) {
+          if (link.agentAId === agentId || link.agentBId === agentId) {
+            this.links.delete(linkId);
+            removedLinksCount++;
+          }
+        }
+        if (existed || removedLinksCount > 0) {
+          this.saveState();
+          this.notifySupervisors({ type: "agent_deregistered", agentId, removedLinksCount });
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", deregistered: existed, removedLinks: removedLinksCount }));
+        return;
+      }
+      if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll")) {
+        const parts = parsedUrl.split("/");
+        const agentId = parts[3];
+        const agent = this.agents.get(agentId);
+        if (agent) {
+          agent.polling = true;
+          agent.lastSeen = (/* @__PURE__ */ new Date()).toISOString();
+        }
+        let timeoutMs = 15e3;
+        if (req.url && req.url.includes("?")) {
+          const query = new URLSearchParams(req.url.split("?")[1]);
+          const t = parseInt(query.get("timeout") || "15000", 10);
+          if (!isNaN(t) && t > 0) {
+            timeoutMs = Math.min(t, 6e4);
+          }
+        }
+        const q = this.messageQueues.get(agentId) || [];
+        if (q.length > 0) {
+          const msgs = [...q];
+          q.length = 0;
+          this.sendJson(res, 200, { messages: msgs });
+          return;
+        }
+        let waiters = this.pollWaiters.get(agentId);
+        if (!waiters) {
+          waiters = [];
+          this.pollWaiters.set(agentId, waiters);
+        }
+        let active = true;
+        const resolver = (msgs) => {
+          if (!active) return false;
+          active = false;
+          clearTimeout(timer);
+          const idx = waiters.indexOf(resolver);
+          if (idx !== -1) waiters.splice(idx, 1);
+          this.sendJson(res, 200, { messages: msgs });
+          return true;
+        };
+        const timer = setTimeout(() => {
+          if (!active) return;
+          active = false;
+          const idx = waiters.indexOf(resolver);
+          if (idx !== -1) waiters.splice(idx, 1);
+          this.sendJson(res, 200, { messages: [] });
+        }, timeoutMs);
+        req.on("close", () => {
+          if (!active) return;
+          active = false;
+          clearTimeout(timer);
+          const idx = waiters.indexOf(resolver);
+          if (idx !== -1) waiters.splice(idx, 1);
+        });
+        waiters.push(resolver);
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/links/request") {
+        readJson((body) => {
+          const linkId = `link_${crypto.randomBytes(6).toString("hex")}`;
+          const record = {
+            id: linkId,
+            agentAId: body.agentAId,
+            agentBId: body.agentBId,
+            initiatorHumanId: body.initiatorHumanId || "human_carl",
+            responderHumanId: body.responderHumanId,
+            status: "pending_approval",
+            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+            linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
+            approvals: {},
+            framesCount: 0,
+            bytesAtoB: 0,
+            bytesBtoA: 0
+          };
+          this.links.set(linkId, record);
+          this.saveState();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "ok", linkId: record.id, link: record }));
+        });
+        return;
+      }
+      if (req.method === "GET" && (parsedUrl === "/api/links" || parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/links"))) {
+        let filterAgentId = null;
+        if (parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/links")) {
+          filterAgentId = parsedUrl.split("/")[3] || null;
+        }
+        if (!filterAgentId && req.url && req.url.includes("?")) {
+          const query = new URLSearchParams(req.url.split("?")[1]);
+          filterAgentId = query.get("agentId") || query.get("agent") || null;
+        }
+        let list = Array.from(this.links.values());
+        if (filterAgentId) {
+          list = list.filter((l) => l.agentAId === filterAgentId || l.agentBId === filterAgentId);
+        }
+        const sanitized = list.map((l) => {
+          const msgs = (l.recentMessages || []).slice(-3).map((m) => ({
+            id: m.id,
+            timestamp: m.timestamp,
+            senderId: m.senderId,
+            targetId: m.targetId,
+            text: m.text,
+            isEncrypted: m.isEncrypted
+          }));
+          return {
+            ...l,
+            recentMessages: msgs
+          };
+        });
+        this.sendJson(res, 200, { status: "ok", links: sanitized });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl.startsWith("/api/links/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/approve") && !parsedUrl.endsWith("/send") && !parsedUrl.endsWith("/message")) {
+        const linkId = parsedUrl.replace("/api/links/", "").trim();
+        const link = this.links.get(linkId);
+        if (!link) {
+          this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+          return;
+        }
+        this.sendJson(res, 200, { status: "ok", link });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && parsedUrl.endsWith("/approve")) {
+        const parts = parsedUrl.split("/");
+        const linkId = parts[3];
+        const link = this.links.get(linkId);
+        if (!link) {
+          this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+          return;
+        }
+        readJson((body) => {
+          link.status = "active";
+          if (body.peerVerification) {
+            const targetAgent = this.agents.get(link.agentBId);
+            if (targetAgent) targetAgent.peerVerification = body.peerVerification;
+          }
+          this.saveState();
+          this.sendJson(res, 200, { status: "ok", linkId: link.id, link });
+        });
+        return;
+      }
+      if (req.method === "DELETE" && parsedUrl.startsWith("/api/links/")) {
+        const linkId = parsedUrl.replace("/api/links/", "").trim();
+        const existed = this.links.delete(linkId);
+        if (existed) this.saveState();
+        this.sendJson(res, 200, { status: "ok", severed: existed });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message"))) {
+        const parts = parsedUrl.split("/");
+        const linkId = parts[3];
+        const link = this.links.get(linkId);
+        readJson((body) => {
+          const senderId = body.senderId;
+          const targetId = senderId === link?.agentAId ? link?.agentBId : senderId === link?.agentBId ? link?.agentAId : void 0;
+          if (targetId) {
+            if (link) {
+              link.framesCount = (link.framesCount || 0) + 1;
+              if (!link.recentMessages) link.recentMessages = [];
+              const isEnc = typeof body.payload === "object" && body.payload !== null && Boolean(body.payload.data);
+              const previewText = typeof body.payload === "string" ? body.payload : isEnc ? `[E2EE ${body.payload.data.slice(0, 16)}...]` : "[E2EE Encrypted Payload]";
+              link.recentMessages.push({
+                id: `msg_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+                timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+                senderId,
+                targetId,
+                text: previewText,
+                isEncrypted: isEnc,
+                payload: body.payload
+              });
+              if (link.recentMessages.length > 100) link.recentMessages.shift();
+              this.saveState();
+            }
+            const senderAgent = this.agents.get(senderId);
+            const q = this.messageQueues.get(targetId) || [];
+            this.messageQueues.set(targetId, q);
+            q.push({
+              linkId,
+              senderId,
+              senderEncPub: senderAgent?.encPub,
+              senderSignPub: senderAgent?.signPub,
+              senderKid: senderAgent?.kid,
+              payload: body.payload,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+            const waiters = this.pollWaiters.get(targetId) || [];
+            while (waiters.length > 0 && q.length > 0) {
+              const resolver = waiters[0];
+              const msgs = [...q];
+              q.length = 0;
+              const delivered = resolver(msgs);
+              if (!delivered) {
+                q.unshift(...msgs);
+              }
+            }
+          }
+          this.sendJson(res, 200, { status: "ok", delivered: Boolean(targetId) });
+        });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/telemetry") {
+        readJson((body) => {
+          const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress || "127.0.0.1";
+          const userAgent = req.headers["user-agent"] || "";
+          const level = body.level || "info";
+          const category = body.category || "client";
+          const message = body.message || "Client event";
+          const details = body.details || void 0;
+          const entry = {
+            id: `clog_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            level,
+            category,
+            message,
+            details,
+            userAgent,
+            ip
+          };
+          this.clientLogs.push(entry);
+          if (this.clientLogs.length > 500) this.clientLogs.shift();
+          const levelEmoji = level === "error" ? "\u{1F4A5}" : level === "warn" ? "\u26A0\uFE0F" : "\u2139\uFE0F";
+          console.log(`[CLIENT-LOG] ${entry.timestamp} ${levelEmoji} [${category}] ${message} ${details ? JSON.stringify(details) : ""}`);
+          this.sendJson(res, 200, { status: "ok", received: true, id: entry.id });
+        });
+        return;
+      }
+      if (req.method === "GET" && parsedUrl === "/api/logs") {
+        this.sendJson(res, 200, {
+          status: "ok",
+          accessLogs: this.accessLogs.slice(-100),
+          clientLogs: this.clientLogs.slice(-100)
+        });
+        return;
+      }
+      this.serveStatic(req, res, parsedUrl);
+    } catch (err) {
+      console.error(`[SERVER ERROR] ${req.method} ${req.url}:`, err);
+      this.sendJson(res, 500, { error: "internal_server_error", message: err?.message || "Internal server error" });
     }
-    if (req.method === "GET" && parsedUrl === "/api/logs") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        status: "ok",
-        accessLogs: this.accessLogs.slice(-100),
-        clientLogs: this.clientLogs.slice(-100)
-      }));
-      return;
-    }
-    this.serveStatic(req, res, parsedUrl);
   }
   serveStatic(req, res, parsedUrl) {
     let filePath = path.join(this.staticPath, parsedUrl === "/" ? "index.html" : parsedUrl);

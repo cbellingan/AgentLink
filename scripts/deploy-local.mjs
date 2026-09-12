@@ -45,7 +45,7 @@ function step(name, fn) {
 
 function getRunningPid() {
   try {
-    const lsof = execSync('lsof -t -i:3000', { encoding: 'utf8' }).trim();
+    const lsof = execSync('lsof -t -i:3000 -sTCP:LISTEN', { encoding: 'utf8' }).trim();
     if (lsof) {
       const pids = lsof.split('\n').map(p => parseInt(p.trim(), 10)).filter(Boolean);
       return pids[0] || null;
@@ -61,26 +61,40 @@ function getRunningPid() {
 }
 
 function stopServer(pid) {
-  if (!pid) return;
-  console.log(`   Stopping existing server process (PID: ${pid})...`);
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {}
+  if (pid) {
+    console.log(`   Stopping existing server process (PID: ${pid})...`);
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {}
+  }
   
   // Wait up to 3 seconds for port to clear
   const start = Date.now();
   while (Date.now() - start < 3000) {
     try {
-      process.kill(pid, 0); // check if alive
+      const lsof = execSync('lsof -t -i:3000 -sTCP:LISTEN', { encoding: 'utf8' }).trim();
+      if (!lsof) break; // port free!
+      const activePid = parseInt(lsof.split('\n')[0].trim(), 10);
+      if (activePid && !isNaN(activePid)) {
+        process.kill(activePid, 'SIGTERM');
+      }
       execSync('sleep 0.2');
     } catch {
-      break; // process exited
+      break;
     }
   }
 
-  // Force kill if still alive
+  // Force kill if port 3000 is still held
   try {
-    process.kill(pid, 'SIGKILL');
+    const remaining = execSync('lsof -t -i:3000 -sTCP:LISTEN', { encoding: 'utf8' }).trim();
+    if (remaining) {
+      const pids = remaining.split('\n').map(p => parseInt(p.trim(), 10)).filter(Boolean);
+      for (const p of pids) {
+        console.log(`   Force terminating stubborn process on port 3000 (PID: ${p})...`);
+        process.kill(p, 'SIGKILL');
+      }
+      execSync('sleep 0.5');
+    }
   } catch {}
 }
 
