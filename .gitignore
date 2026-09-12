@@ -10,6 +10,8 @@ coverage/
 
 # Runtime state (local private keys & session tokens)
 .data/agent-link-state.json
+.data/*.pid
+.backup/
 
 # Logs & environment
 *.log

@@ -10,6 +10,9 @@
     "build:web": "esbuild web/app.ts --bundle --outfile=web/bundle.js --format=esm --sourcemap",
     "build:worker": "esbuild cloudflare/worker.ts --bundle --format=esm --outfile=dist/worker.mjs --target=es2022",
     "start": "node dist/server.mjs",
+    "deploy": "node scripts/deploy-local.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
+    "tunnel": "node scripts/tunnel.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "audit:security": "node scripts/security-auditor.mjs"
