@@ -263,6 +263,60 @@ print("E2EE_VERIFICATION_SUCCESS")
     expect(stdout).toContain("E2EE_VERIFICATION_SUCCESS");
   });
 
+  it('Step 7b: Cross-Runtime Client List Retrieval & Explicit Content-Length Header Invariant', async () => {
+    // 1. Verify HTTP Response Headers strictly comply with Explicit Headers Invariant
+    const linksRes = await fetch(`${baseUrl}/api/links`);
+    expect(linksRes.status).toBe(200);
+    const linksContentType = linksRes.headers.get('content-type') || '';
+    expect(linksContentType).toContain('application/json');
+    const linksContentLength = linksRes.headers.get('content-length');
+    expect(linksContentLength).toBeTruthy();
+    const linksText = await linksRes.text();
+    expect(parseInt(linksContentLength!, 10)).toBe(Buffer.byteLength(linksText, 'utf8'));
+
+    const agentsRes = await fetch(`${baseUrl}/api/agents`);
+    expect(agentsRes.status).toBe(200);
+    const agentsContentLength = agentsRes.headers.get('content-length');
+    expect(agentsContentLength).toBeTruthy();
+    const agentsText = await agentsRes.text();
+    expect(parseInt(agentsContentLength!, 10)).toBe(Buffer.byteLength(agentsText, 'utf8'));
+
+    // 2. Python Client queries links and agents using standard urllib/http.client
+    const aliceKeysDir = path.join(tempDir, 'alice_keys');
+    const listTestScript = `
+import json, sys
+from pathlib import Path
+from agent_link.client import AgentLinkClient
+from agent_link.crypto import AgentKeypair
+
+alice_kp = AgentKeypair.load(agent_id='agent-alice', directory=Path('${aliceKeysDir}'))
+client = AgentLinkClient(
+    server_url='${baseUrl}',
+    api_key='${apiKeyAlice}',
+    keypair=alice_kp,
+)
+
+# Fetch links
+links = client.get_links()
+assert len(links) >= 1, f"Expected at least 1 link, got {len(links)}"
+link = links[0]
+assert link["agentAId"] == "agent-alice"
+assert link["agentBId"] == "agent-bob"
+
+# Fetch single peer agent
+bob_agents = client.get_agents("agent-bob")
+assert len(bob_agents) == 1, f"Expected 1 agent, got {len(bob_agents)}"
+bob_agent = bob_agents[0]
+assert bob_agent["id"] == "agent-bob"
+assert "encPub" in bob_agent
+
+print("PYTHON_LIST_AND_HEADERS_OK")
+`;
+
+    const { stdout } = await execFileAsync('python3', ['-c', listTestScript]);
+    expect(stdout).toContain("PYTHON_LIST_AND_HEADERS_OK");
+  });
+
   it('Step 8: Skill file validation for autonomous agents', () => {
     // Check that SKILL.md exists in CLI repo and specifies clear protocol
     const cliSkillPath = '/Users/cb/Documents/antigravity/agent-link-cli/SKILL.md';

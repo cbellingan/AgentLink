@@ -1,17 +1,53 @@
 #!/usr/bin/env node
 /**
  * AgentLink Synthetic Smoke Test Suite
- * Used by CI/CD pipeline to verify server health, gatekeeper security, and WebSocket stability.
+ * Used by CI/CD pipeline to verify server health, gatekeeper security,
+ * endpoint serialization, Content-Length header invariants, and Python cross-runtime stability.
  */
 
 import { WebSocket } from 'ws';
+import { execSync } from 'node:child_process';
 
-const target = process.argv[2] || process.env.TARGET_URL || 'http://localhost:3000';
+const target = (process.argv[2] || process.env.TARGET_URL || 'http://localhost:3000').replace(/\/$/, '');
 const wsTarget = `${target.replace(/^http/, 'ws')}/ws`;
 
 console.log(`🩺 ========================================================`);
 console.log(`🩺 Running Synthetic Smoke Tests against ${target}`);
 console.log(`🩺 ========================================================`);
+
+const defaultHeaders = {
+  'Accept-Encoding': 'identity',
+  'User-Agent': 'AgentLink-SmokeTest/1.0',
+};
+
+async function safeFetch(url, options = {}) {
+  const headers = { ...defaultHeaders, ...(options.headers || {}) };
+  return fetch(url, { ...options, headers });
+}
+
+function verifyHeaders(res, rawText) {
+  const cType = res.headers.get('content-type') || '';
+  if (!cType.includes('application/json')) {
+    throw new Error(`Expected Content-Type to contain application/json, got "${cType}"`);
+  }
+  const encoding = res.headers.get('content-encoding');
+  const cLen = res.headers.get('content-length');
+  const expectedBytes = Buffer.byteLength(rawText, 'utf8');
+
+  // When uncompressed (or when requesting Accept-Encoding: identity), Content-Length must be exact
+  if (!encoding) {
+    if (!cLen) {
+      throw new Error('Missing explicit Content-Length header on uncompressed response');
+    }
+    if (parseInt(cLen, 10) !== expectedBytes) {
+      throw new Error(`Content-Length mismatch: header=${cLen}, actual byteLength=${expectedBytes}`);
+    }
+  } else if (cLen) {
+    if (parseInt(cLen, 10) <= 0) {
+      throw new Error(`Invalid Content-Length on compressed stream: ${cLen}`);
+    }
+  }
+}
 
 async function testEndpoint(name, fn) {
   try {
@@ -27,24 +63,29 @@ async function testEndpoint(name, fn) {
 
 async function run() {
   let adminToken = '';
+  let sampleAgentId = '';
 
-  // 1. Server info check
-  await testEndpoint('1. Server Info Endpoint (/api/server-info)', async () => {
-    const res = await fetch(`${target}/api/server-info`);
+  // 1. Server info check & header invariant validation
+  await testEndpoint('1. Server Info Endpoint & Headers (/api/server-info)', async () => {
+    const res = await safeFetch(`${target}/api/server-info`);
     if (res.status !== 200) throw new Error(`Unexpected status ${res.status}`);
-    const data = await res.json();
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
     if (!data.name || !data.version) throw new Error('Missing name or version in server-info');
   });
 
   // 2. Gatekeeper Security Policy (Unauthorized email must be rejected with 403 "Not enabled right now")
   await testEndpoint('2. Security Gatekeeper Enforcement (Unauthorized account)', async () => {
-    const res = await fetch(`${target}/api/auth/google`, {
+    const res = await safeFetch(`${target}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'intruder@example.org' }),
     });
     if (res.status !== 403) throw new Error(`Expected 403, got ${res.status}`);
-    const data = await res.json();
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
     if (data.message !== 'Not enabled right now') {
       throw new Error(`Expected 'Not enabled right now', got '${data.message}'`);
     }
@@ -52,31 +93,77 @@ async function run() {
 
   // 3. Authorized Human Login (Carl Bellingan)
   await testEndpoint('3. Authorized Human Authentication (Carl Bellingan)', async () => {
-    const res = await fetch(`${target}/api/auth/google`, {
+    const res = await safeFetch(`${target}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
     });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
-    const data = await res.json();
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
     if (!data.authenticated || !data.token?.startsWith('sec_hum_')) {
       throw new Error('Missing valid admin session token');
     }
     adminToken = data.token;
   });
 
-  // 4. Authenticated Fleet API Check
-  await testEndpoint('4. Authenticated Fleet Agent Listing', async () => {
-    const res = await fetch(`${target}/api/agents`, {
+  // 4. Authenticated Fleet Agent Listing & Serialization Invariant
+  await testEndpoint('4. Authenticated Fleet Agent Listing & Headers (/api/agents)', async () => {
+    const res = await safeFetch(`${target}/api/agents`, {
       headers: { 'Authorization': `Bearer ${adminToken}` },
     });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
-    const data = await res.json();
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
     if (!Array.isArray(data.agents)) throw new Error('Agents response is not an array');
+    if (data.agents.length > 0) {
+      sampleAgentId = data.agents[0].id;
+    }
   });
 
-  // 5. WebSocket Connectivity & Frame Relay Handshake
-  await testEndpoint('5. Real-Time WebSocket Handshake', async () => {
+  // 5. Single Agent Direct Lookup (/api/agents/:id)
+  await testEndpoint('5. Single Agent Direct Lookup (/api/agents/:id)', async () => {
+    if (!sampleAgentId) {
+      // Test 404 behavior for unknown agent
+      const res = await safeFetch(`${target}/api/agents/non_existent_agent_999`);
+      if (res.status !== 404) throw new Error(`Expected 404 for unknown agent, got ${res.status}`);
+      return;
+    }
+    const res = await safeFetch(`${target}/api/agents/${sampleAgentId}`);
+    if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
+    if (!data.agent || data.agent.id !== sampleAgentId) {
+      throw new Error(`Agent payload mismatch: expected ${sampleAgentId}`);
+    }
+  });
+
+  // 6. Global Links Listing & Serialization Invariant (/api/links)
+  await testEndpoint('6. Global Links Listing & Headers (/api/links)', async () => {
+    const res = await safeFetch(`${target}/api/links`);
+    if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
+    if (!Array.isArray(data.links)) throw new Error('Links response is not an array');
+  });
+
+  // 7. Targeted Filtered Links Listing (/api/links?agentId=...)
+  await testEndpoint('7. Filtered Links Listing (/api/links?agentId=...)', async () => {
+    const filterId = sampleAgentId || 'puck';
+    const res = await safeFetch(`${target}/api/links?agentId=${filterId}`);
+    if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+    const rawText = await res.text();
+    verifyHeaders(res, rawText);
+    const data = JSON.parse(rawText);
+    if (!Array.isArray(data.links)) throw new Error('Filtered links response is not an array');
+  });
+
+  // 8. WebSocket Connectivity & Frame Relay Handshake
+  await testEndpoint('8. Real-Time WebSocket Handshake (/ws)', async () => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         ws.terminate();
@@ -94,6 +181,50 @@ async function run() {
         reject(err);
       });
     });
+  });
+
+  // 9. Python Standard Library urllib / http.client Cross-Runtime Validation
+  await testEndpoint('9. Python Cross-Runtime Transport Validation (urllib.request)', async () => {
+    const pythonScript = `
+import urllib.request, json, sys
+
+target = "${target}"
+headers = {"User-Agent": "AgentLink-CLI/1.0"}
+
+# 1. Test /api/links with Python urllib
+req = urllib.request.Request(f"{target}/api/links", headers=headers)
+with urllib.request.urlopen(req, timeout=5) as resp:
+    if resp.status != 200:
+        sys.exit(f"Unexpected status for /api/links: {resp.status}")
+    raw = resp.read()
+    data = json.loads(raw.decode("utf-8"))
+    if "links" not in data:
+        sys.exit("Missing 'links' key in /api/links response")
+
+# 2. Test /api/agents with Python urllib
+req = urllib.request.Request(f"{target}/api/agents", headers=headers)
+with urllib.request.urlopen(req, timeout=5) as resp:
+    if resp.status != 200:
+        sys.exit(f"Unexpected status for /api/agents: {resp.status}")
+    raw = resp.read()
+    data = json.loads(raw.decode("utf-8"))
+    if "agents" not in data:
+        sys.exit("Missing 'agents' key in /api/agents response")
+
+print("PYTHON_TRANSPORT_OK")
+`;
+
+    try {
+      const out = execSync(`python3 -c '${pythonScript.replace(/'/g, "'\\''")}'`, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      if (!out.includes('PYTHON_TRANSPORT_OK')) {
+        throw new Error(`Python script did not report success: ${out}`);
+      }
+    } catch (pyErr) {
+      throw new Error(`Python client validation failed: ${pyErr.stderr || pyErr.message}`);
+    }
   });
 
   console.log(`\n🎉 ALL SYNTHETIC SMOKE TESTS PASSED!`);

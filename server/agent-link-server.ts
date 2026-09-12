@@ -341,11 +341,10 @@ export class AgentLinkServer {
         // Enforce Carl Bellingan restriction
         if (email !== this.adminEmail) {
           setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
+          this.sendJson(res, 403, {
             error: 'not_enabled',
             message: 'Not enabled right now',
-          }));
+          });
           return;
         }
 
@@ -361,8 +360,7 @@ export class AgentLinkServer {
         this.humanSessions.set(token, user);
 
         setSecurityNote(`SUCCESSFUL GOOGLE LOGIN for ${email}`);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', authenticated: true, token, user }));
+        this.sendJson(res, 200, { status: 'ok', authenticated: true, token, user });
       });
       return;
     }
@@ -375,18 +373,16 @@ export class AgentLinkServer {
 
         if (email !== this.adminEmail) {
           setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
+          this.sendJson(res, 403, {
             error: 'not_enabled',
             message: 'Not enabled right now',
-          }));
+          });
           return;
         }
 
         if (password !== this.adminPassword) {
           setSecurityNote(`INVALID PASSWORD for ${email}`);
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'invalid_credentials', message: 'Invalid password' }));
+          this.sendJson(res, 401, { error: 'invalid_credentials', message: 'Invalid password' });
           return;
         }
 
@@ -401,8 +397,7 @@ export class AgentLinkServer {
         this.humanSessions.set(token, user);
 
         setSecurityNote(`SUCCESSFUL CREDENTIAL LOGIN for ${email}`);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', authenticated: true, token, user }));
+        this.sendJson(res, 200, { status: 'ok', authenticated: true, token, user });
       });
       return;
     }
@@ -411,20 +406,17 @@ export class AgentLinkServer {
     if (req.method === 'GET' && parsedUrl === '/api/auth/me') {
       const user = this.getAuthenticatedHuman(req);
       if (!user) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'unauthorized', message: 'No active session' }));
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'No active session' });
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', user }));
+      this.sendJson(res, 200, { status: 'ok', user });
       return;
     }
 
     if (req.method === 'POST' && parsedUrl === '/api/auth/logout') {
       const token = this.extractToken(req);
       if (token) this.humanSessions.delete(token);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', loggedOut: true }));
+      this.sendJson(res, 200, { status: 'ok', loggedOut: true });
       return;
     }
 
@@ -432,8 +424,7 @@ export class AgentLinkServer {
     if (req.method === 'POST' && parsedUrl === '/api/admin/clean-slate') {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'forbidden', message: 'Admin authentication required' }));
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
         return;
       }
 
@@ -508,8 +499,7 @@ export class AgentLinkServer {
         this.saveState();
         this.notifySupervisors({ type: 'clean_slate', mode, removedKeys, removedAgents, removedLinks });
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        this.sendJson(res, 200, {
           status: 'ok',
           mode,
           removedKeys,
@@ -518,7 +508,7 @@ export class AgentLinkServer {
           remainingAgents: this.agents.size,
           remainingKeys: this.apiKeys.size,
           remainingLinks: this.links.size,
-        }));
+        });
       });
       return;
     }
@@ -527,8 +517,7 @@ export class AgentLinkServer {
     if (req.method === 'POST' && parsedUrl === '/api/keys/generate') {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'forbidden', message: 'Admin authentication required' }));
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
         return;
       }
 
@@ -546,8 +535,7 @@ export class AgentLinkServer {
         this.saveState();
 
         setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
-        res.writeHead(201, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', apiKey: keyRecord }));
+        this.sendJson(res, 201, { status: 'ok', apiKey: keyRecord });
       });
       return;
     }
@@ -555,8 +543,7 @@ export class AgentLinkServer {
     if (req.method === 'GET' && parsedUrl === '/api/keys') {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'forbidden', message: 'Admin authentication required' }));
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
         return;
       }
 
@@ -569,16 +556,14 @@ export class AgentLinkServer {
         lastUsedAt: k.lastUsedAt,
       }));
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', keys: keysList }));
+      this.sendJson(res, 200, { status: 'ok', keys: keysList });
       return;
     }
 
     if (req.method === 'DELETE' && parsedUrl.startsWith('/api/keys/')) {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'forbidden', message: 'Admin authentication required' }));
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
         return;
       }
 
@@ -593,8 +578,7 @@ export class AgentLinkServer {
       }
       if (deleted) this.saveState();
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', deleted }));
+      this.sendJson(res, 200, { status: 'ok', deleted });
       return;
     }
 
@@ -675,8 +659,7 @@ export class AgentLinkServer {
     if (req.method === 'DELETE' && parsedUrl.startsWith('/api/agents/')) {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== 'admin') {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'forbidden', message: 'Admin authentication required' }));
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
         return;
       }
 
@@ -699,8 +682,7 @@ export class AgentLinkServer {
         this.notifySupervisors({ type: 'agent_deregistered', agentId, removedLinksCount });
       }
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', deregistered: existed, removedLinks: removedLinksCount }));
+      this.sendJson(res, 200, { status: 'ok', deregistered: existed, removedLinks: removedLinksCount });
       return;
     }
 
@@ -791,8 +773,7 @@ export class AgentLinkServer {
         };
         this.links.set(linkId, record);
         this.saveState();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', linkId: record.id, link: record }));
+        this.sendJson(res, 200, { status: 'ok', linkId: record.id, link: record });
       });
       return;
     }

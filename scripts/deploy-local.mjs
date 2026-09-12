@@ -300,9 +300,15 @@ async function main() {
       checkOrStartTunnel();
     });
 
+    // 8. Tier 2 Public Edge Verification
+    step('8. Tier 2 Public Edge Verification (https://agent.signetmesh.com)', () => {
+      console.log('   Running synthetic smoke tests through Cloudflare Edge (https://agent.signetmesh.com)...');
+      execSync('node scripts/smoke-test.mjs https://agent.signetmesh.com', { stdio: 'inherit' });
+    });
+
     console.log('🎉 ========================================================');
-    console.log('🎉 LOCAL CI/CD PIPELINE SUCCEEDED!');
-    console.log('🎉 New build deployed and verified healthy on port 3000.');
+    console.log('🎉 CI/CD PIPELINE & DUAL-TIER VERIFICATION SUCCEEDED!');
+    console.log('🎉 New build deployed and verified healthy on localhost:3000 and agent.signetmesh.com.');
     console.log('🎉 ========================================================');
 
   } catch (error) {

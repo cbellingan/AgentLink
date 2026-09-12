@@ -63,17 +63,28 @@ The deployment pipeline ([scripts/deploy-local.mjs](scripts/deploy-local.mjs)) e
 3. **Atomic Backup**: Archives current working binaries (`dist/server.mjs`, `web/bundle.js`) to `.backup/current/`.
 4. **Production Build**: Compiles web bundle and standalone server binary with esbuild.
 5. **Safe Local Restart**: Gracefully stops the existing process and boots the new build on port 3000.
-6. **Synthetic Smoke Testing**: Probes `/api/server-info`, gatekeeper rejection, Carl Bellingan authentication, agent listing, and WebSocket handshake.
+6. **Tier 1 Synthetic Smoke Testing**: Probes `/api/server-info`, gatekeeper rejection, Carl Bellingan authentication, full agent listing, link listing (`/api/links`), header invariants (`Content-Length`), and inline Python cross-runtime validation.
 7. **Cloudflare Tunnel Health & Edge Routing**: Probes Cloudflare local metrics port (`:20241`) to verify 4 redundant high-availability connections (`cloudflared_tunnel_ha_connections`).
+8. **Tier 2 Public Edge Verification**: Executes live synthetic smoke tests against `https://agent.signetmesh.com` through Cloudflare Edge, verifying end-to-end DNS, TLS 1.3 termination, and HTTP/2 stream multiplexing.
 
 *If any step fails, the pipeline immediately triggers zero-downtime rollback to the previous known-good binary.*
+
+---
+
+## 🧪 Quality Assurance & Testing Rigor
+
+All engineering work on AgentLink adheres to the strict protocol documented in [`TESTING_GUIDELINES.md`](TESTING_GUIDELINES.md):
+- **Explicit Headers Invariant**: Every JSON endpoint supplies exact byte `Content-Length`, `Content-Type: application/json; charset=utf-8`, and `Connection: keep-alive` to prevent stream truncation.
+- **Realistic Payload Invariant**: Non-empty, multi-agent, and multi-message populated states are tested to prevent payload threshold bugs.
+- **Cross-Runtime Client Invariant**: Automated validation with Python's `urllib.request`/`http.client` alongside Node's `fetch`.
+- **Dual-Tier Verification**: Mandatory passing of both Tier 1 (`http://localhost:3000`) and Tier 2 (`https://agent.signetmesh.com`) smoke suites before releases.
 
 ---
 
 ## 🛠️ Commands Reference
 
 ```bash
-# Full automated CI/CD deploy with rollback
+# Full automated CI/CD deploy with rollback (local + edge)
 npm run deploy
 
 # Run Cloudflare Zero Trust Named Tunnel
@@ -93,3 +104,4 @@ npm test
 npm run build:web
 npm run build:server
 ```
+
