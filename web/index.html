@@ -80,9 +80,14 @@
             <div id="userEmail" style="font-size: 12px; color: var(--text-secondary);" data-testid="user-email">cbellingan@gmail.com</div>
           </div>
         </div>
-        <button type="button" id="btnSignOut" class="btn btn-secondary btn-sm" data-testid="btn-sign-out">
-          🚪 Sign Out
-        </button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button type="button" id="btnOpenCleanSlateModal" class="btn btn-secondary btn-sm" title="Purge test artifacts or reset to a clean slate" data-testid="btn-open-clean-slate">
+            🧹 Clean Slate
+          </button>
+          <button type="button" id="btnSignOut" class="btn btn-secondary btn-sm" data-testid="btn-sign-out">
+            🚪 Sign Out
+          </button>
+        </div>
       </div>
 
       <!-- API Key Provisioning Card -->
@@ -391,6 +396,43 @@
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clean Slate Modal -->
+    <div id="cleanSlateModal" class="modal-overlay hidden" data-testid="clean-slate-modal">
+      <div class="modal-content" style="max-width: 460px;">
+        <div class="modal-header">
+          <h3 style="font-size: 15px;">🧹 Clean Slate / Environment Separation</h3>
+          <button type="button" id="btnCloseCleanSlateModal" class="modal-close-btn">&times;</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0;">
+            Choose a clean slate option to keep your production workspace uncluttered from automated test runs, scratch agents, and test keys:
+          </p>
+
+          <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px;">
+            <strong style="font-size: 13px; color: var(--accent);">🧹 Purge Test Artifacts (Recommended)</strong>
+            <p style="font-size: 12px; color: var(--text-secondary); margin: 0;">
+              Removes all test keys, test agents (<code>agent-cli-test*</code>, <code>test-*</code>, <code>agent-alice</code>, <code>agent-bob</code>), and ephemeral test links while preserving your genuine enrolled agents and primary fleet keys.
+            </p>
+            <button type="button" id="btnPurgeTestData" class="btn btn-secondary btn-sm" style="align-self: flex-start; margin-top: 4px;" data-testid="btn-purge-test-data">
+              Purge Test Artifacts Now
+            </button>
+          </div>
+
+          <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px;">
+            <strong style="font-size: 13px; color: #f87171;">⚡ Full Clean Slate Reset</strong>
+            <p style="font-size: 12px; color: var(--text-secondary); margin: 0;">
+              Completely resets all agents, links, and temporary keys, giving you a 100% blank slate with only your primary admin key intact.
+            </p>
+            <button type="button" id="btnResetAllCleanSlate" class="btn btn-danger btn-sm" style="align-self: flex-start; margin-top: 4px;" data-testid="btn-reset-all-clean-slate">
+              Reset Everything to Clean Slate
+            </button>
+          </div>
+
+          <div id="cleanSlateStatusMessage" class="hidden" style="font-size: 12px; padding: 8px 12px; border-radius: 6px;"></div>
         </div>
       </div>
     </div>

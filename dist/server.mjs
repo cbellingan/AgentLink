@@ -82,6 +82,9 @@ var AgentLinkServer = class {
     }
   }
   discoverLocalAgents() {
+    if (process.env.NODE_ENV === "test") {
+      return;
+    }
     if (this.apiKeys.size === 0) {
       const defaultKeyVal = "sec_apk_carl_fleet_primary";
       this.apiKeys.set(defaultKeyVal, {
@@ -99,9 +102,16 @@ var AgentLinkServer = class {
         const files = fs.readdirSync(keyDir);
         for (const file of files) {
           if (file.endsWith(".json")) {
+            const lowerFile = file.toLowerCase();
+            if (lowerFile.includes("test") || lowerFile.includes("alice") || lowerFile.includes("bob")) {
+              continue;
+            }
             try {
               const content = JSON.parse(fs.readFileSync(path.join(keyDir, file), "utf8"));
               const agentId = content.agent_id || file.replace(".json", "");
+              if (agentId.includes("test") || agentId.includes("alice") || agentId.includes("bob")) {
+                continue;
+              }
               if (content.signPub && content.encPub && !this.agents.has(agentId)) {
                 const record = {
                   id: agentId,
@@ -348,6 +358,80 @@ var AgentLinkServer = class {
       res.end(JSON.stringify({ status: "ok", loggedOut: true }));
       return;
     }
+    if (req.method === "POST" && parsedUrl === "/api/admin/clean-slate") {
+      const human = this.getAuthenticatedHuman(req);
+      if (!human || human.role !== "admin") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+        return;
+      }
+      readJson((body) => {
+        const mode = body.mode || "test_artifacts";
+        let removedKeys = 0;
+        let removedAgents = 0;
+        let removedLinks = 0;
+        if (mode === "all") {
+          removedKeys = this.apiKeys.size;
+          removedAgents = this.agents.size;
+          removedLinks = this.links.size;
+          this.apiKeys.clear();
+          this.agents.clear();
+          this.links.clear();
+          this.messageQueues.clear();
+          this.pollWaiters.clear();
+          const defaultKeyVal = "sec_apk_carl_fleet_primary";
+          this.apiKeys.set(defaultKeyVal, {
+            id: "key_primary_default",
+            key: defaultKeyVal,
+            ownerHumanId: "human_carl",
+            label: "Primary Fleet Key (Carl Bellingan)",
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        } else {
+          const isTestIdentifier = (id, label) => {
+            const s = `${id} ${label || ""}`.toLowerCase();
+            return s.includes("test") || s.includes("alice") || s.includes("bob");
+          };
+          for (const [k, keyRec] of Array.from(this.apiKeys.entries())) {
+            if (k === "sec_apk_carl_fleet_primary") continue;
+            if (isTestIdentifier(keyRec.id, keyRec.label) || isTestIdentifier(keyRec.key, keyRec.label)) {
+              this.apiKeys.delete(k);
+              removedKeys++;
+            }
+          }
+          const removedAgentIds = /* @__PURE__ */ new Set();
+          for (const [agentId] of Array.from(this.agents.entries())) {
+            if (isTestIdentifier(agentId)) {
+              this.agents.delete(agentId);
+              this.messageQueues.delete(agentId);
+              this.pollWaiters.delete(agentId);
+              removedAgentIds.add(agentId);
+              removedAgents++;
+            }
+          }
+          for (const [linkId, linkRec] of Array.from(this.links.entries())) {
+            if (removedAgentIds.has(linkRec.agentAId) || removedAgentIds.has(linkRec.agentBId) || isTestIdentifier(linkRec.id) || isTestIdentifier(linkRec.agentAId) || isTestIdentifier(linkRec.agentBId)) {
+              this.links.delete(linkId);
+              removedLinks++;
+            }
+          }
+        }
+        this.saveState();
+        this.notifySupervisors({ type: "clean_slate", mode, removedKeys, removedAgents, removedLinks });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          status: "ok",
+          mode,
+          removedKeys,
+          removedAgents,
+          removedLinks,
+          remainingAgents: this.agents.size,
+          remainingKeys: this.apiKeys.size,
+          remainingLinks: this.links.size
+        }));
+      });
+      return;
+    }
     if (req.method === "POST" && parsedUrl === "/api/keys/generate") {
       const human = this.getAuthenticatedHuman(req);
       if (!human || human.role !== "admin") {
@@ -469,12 +553,29 @@ var AgentLinkServer = class {
       return;
     }
     if (req.method === "DELETE" && parsedUrl.startsWith("/api/agents/")) {
+      const human = this.getAuthenticatedHuman(req);
+      if (!human || human.role !== "admin") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden", message: "Admin authentication required" }));
+        return;
+      }
       const agentId = parsedUrl.replace("/api/agents/", "").trim();
       const existed = this.agents.delete(agentId);
       this.messageQueues.delete(agentId);
-      if (existed) this.saveState();
+      this.pollWaiters.delete(agentId);
+      let removedLinksCount = 0;
+      for (const [linkId, link] of Array.from(this.links.entries())) {
+        if (link.agentAId === agentId || link.agentBId === agentId) {
+          this.links.delete(linkId);
+          removedLinksCount++;
+        }
+      }
+      if (existed || removedLinksCount > 0) {
+        this.saveState();
+        this.notifySupervisors({ type: "agent_deregistered", agentId, removedLinksCount });
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", deregistered: existed }));
+      res.end(JSON.stringify({ status: "ok", deregistered: existed, removedLinks: removedLinksCount }));
       return;
     }
     if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll")) {

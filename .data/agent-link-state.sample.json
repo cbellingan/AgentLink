@@ -1,0 +1,173 @@
+{
+  "apiKeys": {
+    "sec_apk_6a11eca936b7fbbdf4a0dd1d335f0f7934f9954cc8f8688d756abeb6737a6f7d": {
+      "id": "key_1789160643794_fe284c4b",
+      "key": "sec_apk_6a11eca936b7fbbdf4a0dd1d335f0f7934f9954cc8f8688d756abeb6737a6f7d",
+      "ownerHumanId": "human_carl",
+      "label": "Primary Fleet Key (Carl Bellingan)",
+      "createdAt": "2026-09-11T21:04:03.794Z",
+      "lastUsedAt": "2026-09-12T20:10:39.206Z"
+    }
+  },
+  "agents": {
+    "my-left": {
+      "id": "my-left",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-12T20:10:37.100Z",
+      "signPub": "4EPd69d0UJvD7i2H894/kLWyD1SqMSr63bcwWO1wda8=",
+      "encPub": "6t3OpQRN1oIhqBqGR56pmoysxKIBH2Uz0TiZ0D1kejU=",
+      "kid": "kid-my-left-ac874eccc5709ca0",
+      "qrPayload": "{\"v\": 1, \"agent\": \"my-left\", \"signPub\": \"4EPd69d0UJvD7i2H894/kLWyD1SqMSr63bcwWO1wda8=\", \"encPub\": \"6t3OpQRN1oIhqBqGR56pmoysxKIBH2Uz0TiZ0D1kejU=\", \"kid\": \"kid-my-left-ac874eccc5709ca0\", \"iat\": \"2026-09-12T20:10:37.095245+00:00\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-12T20:10:57.162Z"
+    },
+    "right": {
+      "id": "right",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-12T20:10:39.206Z",
+      "signPub": "D6Mjj5ThA68wuBsZ3VLtjTMWv1mvwbH4oiyy6rwdg5w=",
+      "encPub": "v9eBgUInfxcTtz5x9cG4BvOsNHdMecxil0LDhO9o6Gc=",
+      "kid": "kid-right-09bb85a4a46f5e6b",
+      "qrPayload": "{\"v\": 1, \"agent\": \"right\", \"signPub\": \"D6Mjj5ThA68wuBsZ3VLtjTMWv1mvwbH4oiyy6rwdg5w=\", \"encPub\": \"v9eBgUInfxcTtz5x9cG4BvOsNHdMecxil0LDhO9o6Gc=\", \"kid\": \"kid-right-09bb85a4a46f5e6b\", \"iat\": \"2026-09-12T20:10:39.202695+00:00\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-12T20:10:55.262Z"
+    },
+    "antigravity": {
+      "id": "antigravity",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T21:08:35.998Z",
+      "signPub": "eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=",
+      "encPub": "QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=",
+      "kid": "kid-antigravity-17fb0479c9e9bbfb",
+      "qrPayload": "{\"v\":1,\"agent\":\"antigravity\",\"signPub\":\"eIXzaBrsrfK7AZBssvEHB7qCkNms3GQumg9Ng3TWnW0=\",\"encPub\":\"QsT9OEBukXxpJC6J+jMc4Buz8n6Z85ZRz6k8mER31js=\",\"kid\":\"kid-antigravity-17fb0479c9e9bbfb\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T21:08:35.998Z"
+    },
+    "ted": {
+      "id": "ted",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-11T21:08:35.998Z",
+      "signPub": "sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=",
+      "encPub": "KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=",
+      "kid": "kid-ted-999d3c4b164498be",
+      "qrPayload": "{\"v\":1,\"agent\":\"ted\",\"signPub\":\"sEJajxtN8SGbPEYbAuaYtbptij+GLFrmUmACt2xHcQE=\",\"encPub\":\"KI6Wlm6/VFh4uuS9HrOycTUmuBnzcfj/ECMZqKPQWgg=\",\"kid\":\"kid-ted-999d3c4b164498be\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-11T21:08:35.998Z"
+    },
+    "agent": {
+      "id": "agent",
+      "ownerHumanId": "human_carl",
+      "registeredAt": "2026-09-12T20:15:06.965Z",
+      "signPub": "wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=",
+      "encPub": "3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=",
+      "kid": "kid-agent-a0b99f26dd3c4227",
+      "qrPayload": "{\"v\":1,\"agent\":\"agent\",\"signPub\":\"wFPvhS9Nh4tog+CuswFPgdH+iuJxsSRiGTQZPRjkWsk=\",\"encPub\":\"3ZCtbumra5E4pb0T/4Pwyd/pwk4s8wgm9jkp+CW0CU4=\",\"kid\":\"kid-agent-a0b99f26dd3c4227\"}",
+      "connected": false,
+      "polling": true,
+      "lastSeen": "2026-09-12T20:15:06.966Z"
+    }
+  },
+  "links": {
+    "link_728e81267063": {
+      "id": "link_728e81267063",
+      "agentAId": "my-left",
+      "agentBId": "right",
+      "initiatorHumanId": "human_carl",
+      "status": "active",
+      "createdAt": "2026-09-11T21:06:12.358Z",
+      "linkKey": "sec_link_7e3d844fd81227530f54b28f1cb44be3",
+      "approvals": {},
+      "framesCount": 6,
+      "bytesAtoB": 0,
+      "bytesBtoA": 0,
+      "recentMessages": [
+        {
+          "id": "msg_1789160782543_2e532a",
+          "timestamp": "2026-09-11T21:06:22.543Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "[E2EE JU5EmerCSzNWhzhx...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "9xYyAvJjQTKgFxt+",
+            "data": "JU5EmerCSzNWhzhxciSX2GRa/w=="
+          }
+        },
+        {
+          "id": "msg_1789160784549_54c1c3",
+          "timestamp": "2026-09-11T21:06:24.549Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "[E2EE iLTAbRCbNYJU/VTz...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "MXzrikfujSZEUejX",
+            "data": "iLTAbRCbNYJU/VTz6X5kNfEt"
+          }
+        },
+        {
+          "id": "msg_1789160982442_936623",
+          "timestamp": "2026-09-11T21:09:42.442Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "hi - test from carl",
+          "isEncrypted": false,
+          "payload": "hi - test from carl"
+        },
+        {
+          "id": "msg_1789161000482_dc1a4a",
+          "timestamp": "2026-09-11T21:10:00.482Z",
+          "senderId": "right",
+          "targetId": "my-left",
+          "text": "[E2EE uj/g1sYC8mngIo/W...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "OrsNSXVGRjbd1ejS",
+            "data": "uj/g1sYC8mngIo/WXAYwiR6A/sdiV6EedLWFFr8="
+          }
+        },
+        {
+          "id": "msg_1789161036553_d9596f",
+          "timestamp": "2026-09-11T21:10:36.553Z",
+          "senderId": "my-left",
+          "targetId": "right",
+          "text": "[E2EE 27ZnHYoXArfpwsIG...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "IzZWl/jMI2icCHe/",
+            "data": "27ZnHYoXArfpwsIGnOdaIBAlbVb+g/FJ/wa9Ew=="
+          }
+        },
+        {
+          "id": "msg_1789243857270_581c68",
+          "timestamp": "2026-09-12T20:10:57.270Z",
+          "senderId": "right",
+          "targetId": "my-left",
+          "text": "[E2EE JoQI6+PRPYhVHyyF...]",
+          "isEncrypted": true,
+          "payload": {
+            "iv": "n19wm08iHcuMyNei",
+            "data": "JoQI6+PRPYhVHyyFhI7YJQmUewNRXJsaVi66Ivk="
+          }
+        }
+      ]
+    },
+    "link_antigravity_ted_primary": {
+      "id": "link_antigravity_ted_primary",
+      "agentAId": "antigravity",
+      "agentBId": "ted",
+      "initiatorHumanId": "human_carl",
+      "status": "active",
+      "createdAt": "2026-09-11T21:08:35.998Z",
+      "linkKey": "sec_link_3bb2badce4c88d4c78a14f0c1ed87d7d",
+      "approvals": {},
+      "framesCount": 0,
+      "bytesAtoB": 0,
+      "bytesBtoA": 0
+    }
+  }
+}

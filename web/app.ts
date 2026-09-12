@@ -866,6 +866,72 @@ btnCopyModalQrJson?.addEventListener('click', () => {
   }
 });
 
+// Clean Slate Modal Elements & Logic
+const btnOpenCleanSlateModal = document.getElementById('btnOpenCleanSlateModal');
+const cleanSlateModal = document.getElementById('cleanSlateModal');
+const btnCloseCleanSlateModal = document.getElementById('btnCloseCleanSlateModal');
+const btnPurgeTestData = document.getElementById('btnPurgeTestData');
+const btnResetAllCleanSlate = document.getElementById('btnResetAllCleanSlate');
+const cleanSlateStatusMessage = document.getElementById('cleanSlateStatusMessage');
+
+function showCleanSlateStatus(msg: string, isError: boolean = false) {
+  if (!cleanSlateStatusMessage) return;
+  cleanSlateStatusMessage.textContent = msg;
+  cleanSlateStatusMessage.style.display = 'block';
+  cleanSlateStatusMessage.style.background = isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+  cleanSlateStatusMessage.style.color = isError ? '#f87171' : '#34d399';
+  cleanSlateStatusMessage.style.border = `1px solid ${isError ? '#ef4444' : '#10b981'}`;
+  cleanSlateStatusMessage.classList.remove('hidden');
+}
+
+btnOpenCleanSlateModal?.addEventListener('click', () => {
+  if (cleanSlateStatusMessage) {
+    cleanSlateStatusMessage.classList.add('hidden');
+    cleanSlateStatusMessage.style.display = 'none';
+  }
+  cleanSlateModal?.classList.remove('hidden');
+});
+
+btnCloseCleanSlateModal?.addEventListener('click', () => {
+  cleanSlateModal?.classList.add('hidden');
+});
+
+async function triggerCleanSlate(mode: 'test_artifacts' | 'all') {
+  try {
+    showCleanSlateStatus('Cleaning...', false);
+    const res = await apiRequest('/api/admin/clean-slate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+
+    if (res.status === 'ok') {
+      showCleanSlateStatus(
+        `✓ Clean slate complete! Purged ${res.removedAgents} agents, ${res.removedKeys} keys, ${res.removedLinks} links.`,
+        false
+      );
+      await refreshDashboard();
+      setTimeout(() => {
+        cleanSlateModal?.classList.add('hidden');
+      }, 1500);
+    } else {
+      showCleanSlateStatus(res.message || 'Clean slate operation failed', true);
+    }
+  } catch (err: any) {
+    showCleanSlateStatus(err.message || 'Failed to execute clean slate', true);
+  }
+}
+
+btnPurgeTestData?.addEventListener('click', () => {
+  triggerCleanSlate('test_artifacts');
+});
+
+btnResetAllCleanSlate?.addEventListener('click', () => {
+  if (confirm('Are you sure you want to perform a full reset to a pristine clean slate? This will remove all agents and links.')) {
+    triggerCleanSlate('all');
+  }
+});
+
 async function refreshDashboard() {
   await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks()]);
 }

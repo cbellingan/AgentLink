@@ -1,12 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { AgentLinkServer } from '../server/agent-link-server.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 describe('AgentLink Server Test Suite', () => {
   let server: AgentLinkServer;
   let port: number;
   let baseUrl: string;
+  let tempDir: string;
 
   beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlink-server-test-'));
+    process.env.DATA_PATH = path.join(tempDir, 'state.json');
+    process.env.NODE_ENV = 'test';
+
     server = new AgentLinkServer(0);
     port = await server.listen();
     baseUrl = `http://127.0.0.1:${port}`;
@@ -14,6 +22,9 @@ describe('AgentLink Server Test Suite', () => {
 
   afterAll(async () => {
     await server.close();
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('1. Rejects Google sign-in for any account other than cbellingan@gmail.com with "Not enabled right now"', async () => {

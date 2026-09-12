@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+
+# Test outputs
+coverage/
+.vitest/
+
+# Runtime state (local private keys & session tokens)
+.data/agent-link-state.json
+
+# Logs & environment
+*.log
+.env
+.env.local
+
+# OS
+.DS_Store

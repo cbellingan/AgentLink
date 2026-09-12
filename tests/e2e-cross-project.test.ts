@@ -18,8 +18,10 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
   let apiKeyBob: string;
 
   beforeAll(async () => {
-    // 1. Create temporary directory for isolated agent keyrings
+    // 1. Create temporary directory for isolated agent keyrings and state
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-link-e2e-'));
+    process.env.DATA_PATH = path.join(tempDir, 'state.json');
+    process.env.NODE_ENV = 'test';
 
     // 2. Start AgentLink Server on ephemeral port
     server = new AgentLinkServer(0);
