@@ -281,7 +281,26 @@ export class AgentLinkServer {
     // 2. Google OAuth Sign-In endpoint
     if (req.method === 'POST' && parsedUrl === '/api/auth/google') {
       readJson((body) => {
-        const email = (body.email || '').trim().toLowerCase();
+        let email = (body.email || '').trim().toLowerCase();
+        let name = (body.name || 'Carl Bellingan').trim();
+
+        // If a Google JWT ID token credential is provided, decode payload
+        if (body.credential && typeof body.credential === 'string') {
+          try {
+            const parts = body.credential.split('.');
+            if (parts.length === 3) {
+              const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+              if (payload.email) {
+                email = String(payload.email).trim().toLowerCase();
+              }
+              if (payload.name) {
+                name = String(payload.name).trim();
+              }
+            }
+          } catch {
+            // Fallback to body.email if credential decode fails
+          }
+        }
 
         // Enforce Carl Bellingan restriction
         if (email !== this.adminEmail) {
@@ -298,7 +317,7 @@ export class AgentLinkServer {
         const token = `sec_hum_${crypto.randomBytes(24).toString('hex')}`;
         const user: HumanUser = {
           id: 'human_carl',
-          name: 'Carl Bellingan',
+          name: name || 'Carl Bellingan',
           email: this.adminEmail,
           avatar: '👑',
           role: 'admin',

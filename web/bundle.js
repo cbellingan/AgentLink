@@ -2130,6 +2130,16 @@ var modalAgentName = document.getElementById("modalAgentName");
 var modalAgentKid = document.getElementById("modalAgentKid");
 var modalAgentQrJson = document.getElementById("modalAgentQrJson");
 var btnCopyModalQrJson = document.getElementById("btnCopyModalQrJson");
+var googleConsentModal = document.getElementById("googleConsentModal");
+var googleAccountChooserView = document.getElementById("googleAccountChooserView");
+var googleAnotherAccountView = document.getElementById("googleAnotherAccountView");
+var googleAccountCarl = document.getElementById("googleAccountCarl");
+var btnUseAnotherGoogleAccount = document.getElementById("btnUseAnotherGoogleAccount");
+var btnCancelGoogleConsent = document.getElementById("btnCancelGoogleConsent");
+var btnConfirmGoogleConsent = document.getElementById("btnConfirmGoogleConsent");
+var formAnotherGoogleAccount = document.getElementById("formAnotherGoogleAccount");
+var inputAnotherGoogleEmail = document.getElementById("inputAnotherGoogleEmail");
+var btnBackToGoogleChooser = document.getElementById("btnBackToGoogleChooser");
 var sessionToken = localStorage.getItem("agentlink_token") || "";
 var currentUser = null;
 var fleetAgents = /* @__PURE__ */ new Map();
@@ -2178,16 +2188,27 @@ async function apiRequest(path, options = {}) {
   }
   return data;
 }
+function openGoogleConsentModal() {
+  hideNotEnabled();
+  googleAccountChooserView?.classList.remove("hidden");
+  googleAnotherAccountView?.classList.add("hidden");
+  if (inputAnotherGoogleEmail) inputAnotherGoogleEmail.value = "";
+  googleConsentModal?.classList.remove("hidden");
+}
+function closeGoogleConsentModal() {
+  googleConsentModal?.classList.add("hidden");
+}
 async function handleGoogleLogin(emailParam) {
   hideNotEnabled();
+  closeGoogleConsentModal();
   let email = emailParam;
   if (!email && inputEmail && inputEmail.value.trim()) {
     email = inputEmail.value.trim();
   }
   if (!email) {
-    email = prompt("Enter your Google email address:", "cbellingan@gmail.com") || "";
+    openGoogleConsentModal();
+    return;
   }
-  if (!email.trim()) return;
   try {
     const res = await apiRequest("/api/auth/google", {
       method: "POST",
@@ -2208,6 +2229,31 @@ async function handleGoogleLogin(emailParam) {
     }
   }
 }
+btnConfirmGoogleConsent?.addEventListener("click", () => {
+  handleGoogleLogin("cbellingan@gmail.com");
+});
+googleAccountCarl?.addEventListener("click", () => {
+  handleGoogleLogin("cbellingan@gmail.com");
+});
+btnUseAnotherGoogleAccount?.addEventListener("click", () => {
+  googleAccountChooserView?.classList.add("hidden");
+  googleAnotherAccountView?.classList.remove("hidden");
+  inputAnotherGoogleEmail?.focus();
+});
+btnBackToGoogleChooser?.addEventListener("click", () => {
+  googleAnotherAccountView?.classList.add("hidden");
+  googleAccountChooserView?.classList.remove("hidden");
+});
+btnCancelGoogleConsent?.addEventListener("click", () => {
+  closeGoogleConsentModal();
+});
+formAnotherGoogleAccount?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const enteredEmail = inputAnotherGoogleEmail?.value.trim();
+  if (enteredEmail) {
+    handleGoogleLogin(enteredEmail);
+  }
+});
 formCredentialLogin?.addEventListener("submit", async (e) => {
   e.preventDefault();
   hideNotEnabled();

@@ -35,6 +35,18 @@ const modalAgentKid = document.getElementById('modalAgentKid')!;
 const modalAgentQrJson = document.getElementById('modalAgentQrJson') as HTMLTextAreaElement;
 const btnCopyModalQrJson = document.getElementById('btnCopyModalQrJson')!;
 
+// Google Consent & Permissions Modal
+const googleConsentModal = document.getElementById('googleConsentModal')!;
+const googleAccountChooserView = document.getElementById('googleAccountChooserView')!;
+const googleAnotherAccountView = document.getElementById('googleAnotherAccountView')!;
+const googleAccountCarl = document.getElementById('googleAccountCarl')!;
+const btnUseAnotherGoogleAccount = document.getElementById('btnUseAnotherGoogleAccount')!;
+const btnCancelGoogleConsent = document.getElementById('btnCancelGoogleConsent')!;
+const btnConfirmGoogleConsent = document.getElementById('btnConfirmGoogleConsent')!;
+const formAnotherGoogleAccount = document.getElementById('formAnotherGoogleAccount') as HTMLFormElement;
+const inputAnotherGoogleEmail = document.getElementById('inputAnotherGoogleEmail') as HTMLInputElement;
+const btnBackToGoogleChooser = document.getElementById('btnBackToGoogleChooser')!;
+
 // State
 let sessionToken = localStorage.getItem('agentlink_token') || '';
 let currentUser: any = null;
@@ -96,18 +108,33 @@ async function apiRequest(path: string, options: RequestInit = {}): Promise<any>
   return data;
 }
 
-// 1. Google Sign-In Handler
+// 1. Google Sign-In Flow & Handlers
+function openGoogleConsentModal() {
+  hideNotEnabled();
+  googleAccountChooserView?.classList.remove('hidden');
+  googleAnotherAccountView?.classList.add('hidden');
+  if (inputAnotherGoogleEmail) inputAnotherGoogleEmail.value = '';
+  googleConsentModal?.classList.remove('hidden');
+}
+
+function closeGoogleConsentModal() {
+  googleConsentModal?.classList.add('hidden');
+}
+
 async function handleGoogleLogin(emailParam?: string) {
   hideNotEnabled();
+  closeGoogleConsentModal();
 
   let email = emailParam;
   if (!email && inputEmail && inputEmail.value.trim()) {
     email = inputEmail.value.trim();
   }
+
+  // If no email provided, open the authentic Google Account Chooser & Consent modal
   if (!email) {
-    email = prompt('Enter your Google email address:', 'cbellingan@gmail.com') || '';
+    openGoogleConsentModal();
+    return;
   }
-  if (!email.trim()) return;
 
   try {
     const res = await apiRequest('/api/auth/google', {
@@ -130,6 +157,38 @@ async function handleGoogleLogin(emailParam?: string) {
     }
   }
 }
+
+// Google Consent Modal Event Listeners
+btnConfirmGoogleConsent?.addEventListener('click', () => {
+  handleGoogleLogin('cbellingan@gmail.com');
+});
+
+googleAccountCarl?.addEventListener('click', () => {
+  handleGoogleLogin('cbellingan@gmail.com');
+});
+
+btnUseAnotherGoogleAccount?.addEventListener('click', () => {
+  googleAccountChooserView?.classList.add('hidden');
+  googleAnotherAccountView?.classList.remove('hidden');
+  inputAnotherGoogleEmail?.focus();
+});
+
+btnBackToGoogleChooser?.addEventListener('click', () => {
+  googleAnotherAccountView?.classList.add('hidden');
+  googleAccountChooserView?.classList.remove('hidden');
+});
+
+btnCancelGoogleConsent?.addEventListener('click', () => {
+  closeGoogleConsentModal();
+});
+
+formAnotherGoogleAccount?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const enteredEmail = inputAnotherGoogleEmail?.value.trim();
+  if (enteredEmail) {
+    handleGoogleLogin(enteredEmail);
+  }
+});
 
 // 2. Credential Login Handler
 formCredentialLogin?.addEventListener('submit', async (e) => {
