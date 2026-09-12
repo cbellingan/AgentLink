@@ -33,7 +33,17 @@ var AgentLinkServer = class {
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
     this.staticPath = staticPath2 || path.resolve("web");
-    this.stateFilePath = process.env.DATA_PATH || path.resolve(".data/agent-link-state.json");
+    if (process.env.DATA_PATH) {
+      this.stateFilePath = path.resolve(process.env.DATA_PATH);
+    } else if (process.env.NODE_ENV === "production" || this.port === 3e3) {
+      this.stateFilePath = path.resolve(".data/prod/agent-link-state.json");
+    } else {
+      this.stateFilePath = path.resolve(".data/dev/agent-link-state.json");
+    }
+    const stateDir = path.dirname(this.stateFilePath);
+    if (!fs.existsSync(stateDir)) {
+      fs.mkdirSync(stateDir, { recursive: true });
+    }
     this.loadState();
     this.discoverLocalAgents();
   }
@@ -103,13 +113,14 @@ var AgentLinkServer = class {
         for (const file of files) {
           if (file.endsWith(".json")) {
             const lowerFile = file.toLowerCase();
-            if (lowerFile.includes("test") || lowerFile.includes("alice") || lowerFile.includes("bob")) {
+            if (lowerFile.includes("test") || lowerFile.includes("alice") || lowerFile.includes("bob") || lowerFile.startsWith("mesh-") || lowerFile === "agent.json" || lowerFile.includes("demo") || lowerFile.includes("temp")) {
               continue;
             }
             try {
               const content = JSON.parse(fs.readFileSync(path.join(keyDir, file), "utf8"));
               const agentId = content.agent_id || file.replace(".json", "");
-              if (agentId.includes("test") || agentId.includes("alice") || agentId.includes("bob")) {
+              const lowerAgentId = agentId.toLowerCase();
+              if (lowerAgentId.includes("test") || lowerAgentId.includes("alice") || lowerAgentId.includes("bob") || lowerAgentId.startsWith("mesh-") || lowerAgentId === "agent" || lowerAgentId.includes("demo") || lowerAgentId.includes("temp")) {
                 continue;
               }
               if (content.signPub && content.encPub && !this.agents.has(agentId)) {
@@ -892,7 +903,8 @@ var AgentLinkServer = class {
 
 // server/run.ts
 import path2 from "node:path";
-var port = parseInt(process.env.PORT || "3000", 10);
+var defaultPort = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? 3001 : 3e3;
+var port = parseInt(process.env.PORT || String(defaultPort), 10);
 var staticPath = process.env.STATIC_PATH || path2.resolve("web");
 var server = new AgentLinkServer(port, staticPath);
 server.listen().catch((err) => {

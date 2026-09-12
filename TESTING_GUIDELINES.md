@@ -3,6 +3,22 @@
 ## Purpose
 This document establishes the mandatory engineering standards, testing protocols, and planning checklists for all changes to AgentLink (server, web interface, Cloudflare edge, and client SDKs/CLIs). Following these rules ensures that network streaming, serialization, edge proxies, and cross-language runtime differences never cause silent drops or production outages.
 
+## Rule 0: Production is Holy (Strict Environment Separation)
+
+Production is live, connected to the Cloudflare Zero Trust Named Tunnel (`https://agent.signetmesh.com`), and hosts real human keys and peer links. **Prod must be treated with due respect**:
+1. **Port Separation**:
+   - **Production**: Strictly Port `3000` (`NODE_ENV=production PORT=3000`).
+   - **Development**: Dedicated Port `3001` (`NODE_ENV=development PORT=3001` or `npm run dev`).
+   - **Automated Tests**: Ephemeral ports (`PORT=0`) with temporary directories.
+2. **State & Database Isolation**:
+   - **Production State**: Strictly isolated at `.data/prod/agent-link-state.json`.
+   - **Dev State**: Isolated at `.data/dev/agent-link-state.json`.
+   - **Test Suites**: Isolated ephemeral `/tmp` state files (`state.json`), cleaned up on suite teardown.
+3. **Zero Test Contamination on Prod**:
+   - Never run test scripts, registration tests, or experimental synthetic agents (`mesh-test`, `mesh-a`, `agent`) against Port 3000 or `https://agent.signetmesh.com`.
+   - All tests against production must be strictly **read-only / non-mutating** (`npm run smoke:prod`).
+   - Mutating and exploratory end-to-end tests must target the dev instance on Port `3001` (`npm run smoke:dev`).
+
 ---
 
 ## The 5 Invariants of Transport & API Design

@@ -9,8 +9,7 @@ coverage/
 .vitest/
 
 # Runtime state (local private keys & session tokens)
-.data/agent-link-state.json
-.data/*.pid
+.data/
 .backup/
 
 # Logs & environment

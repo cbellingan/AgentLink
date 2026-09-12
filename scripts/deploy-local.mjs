@@ -103,11 +103,12 @@ function startServer() {
   const outLog = fs.openSync(LOG_FILE, 'a');
   const errLog = fs.openSync(LOG_FILE, 'a');
 
+  const prodStatePath = path.join(ROOT_DIR, '.data', 'prod', 'agent-link-state.json');
   const child = spawn('node', ['dist/server.mjs'], {
     detached: true,
     stdio: ['ignore', outLog, errLog],
     cwd: ROOT_DIR,
-    env: { ...process.env, NODE_ENV: 'production', PORT: '3000' },
+    env: { ...process.env, NODE_ENV: 'production', PORT: '3000', DATA_PATH: prodStatePath },
   });
 
   child.unref();
@@ -208,6 +209,9 @@ function performRollback() {
     if (fs.existsSync(path.join(BACKUP_DIR, 'bundle.js'))) {
       fs.copyFileSync(path.join(BACKUP_DIR, 'bundle.js'), path.join(ROOT_DIR, 'web', 'bundle.js'));
     }
+    if (fs.existsSync(path.join(BACKUP_DIR, 'agent-link-state.json'))) {
+      fs.copyFileSync(path.join(BACKUP_DIR, 'agent-link-state.json'), path.join(ROOT_DIR, '.data', 'prod', 'agent-link-state.json'));
+    }
 
     const currentPid = getRunningPid();
     stopServer(currentPid);
@@ -274,6 +278,10 @@ async function main() {
       }
       if (fs.existsSync(webBundle)) {
         fs.copyFileSync(webBundle, path.join(BACKUP_DIR, 'bundle.js'));
+      }
+      const prodState = path.join(ROOT_DIR, '.data', 'prod', 'agent-link-state.json');
+      if (fs.existsSync(prodState)) {
+        fs.copyFileSync(prodState, path.join(BACKUP_DIR, 'agent-link-state.json'));
       }
     });
 
