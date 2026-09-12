@@ -27,6 +27,7 @@ var AgentLinkServer = class {
   pollWaiters = /* @__PURE__ */ new Map();
   // agentId -> resolvers
   accessLogs = [];
+  clientLogs = [];
   supervisorSockets = /* @__PURE__ */ new Set();
   stateFilePath;
   constructor(port2 = 3e3, staticPath2) {
@@ -655,6 +656,42 @@ var AgentLinkServer = class {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "ok", delivered: Boolean(targetId) }));
       });
+      return;
+    }
+    if (req.method === "POST" && parsedUrl === "/api/telemetry") {
+      readJson((body) => {
+        const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress || "127.0.0.1";
+        const userAgent = req.headers["user-agent"] || "";
+        const level = body.level || "info";
+        const category = body.category || "client";
+        const message = body.message || "Client event";
+        const details = body.details || void 0;
+        const entry = {
+          id: `clog_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          level,
+          category,
+          message,
+          details,
+          userAgent,
+          ip
+        };
+        this.clientLogs.push(entry);
+        if (this.clientLogs.length > 500) this.clientLogs.shift();
+        const levelEmoji = level === "error" ? "\u{1F4A5}" : level === "warn" ? "\u26A0\uFE0F" : "\u2139\uFE0F";
+        console.log(`[CLIENT-LOG] ${entry.timestamp} ${levelEmoji} [${category}] ${message} ${details ? JSON.stringify(details) : ""}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", received: true, id: entry.id }));
+      });
+      return;
+    }
+    if (req.method === "GET" && parsedUrl === "/api/logs") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        accessLogs: this.accessLogs.slice(-100),
+        clientLogs: this.clientLogs.slice(-100)
+      }));
       return;
     }
     this.serveStatic(req, res, parsedUrl);

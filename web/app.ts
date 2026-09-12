@@ -52,6 +52,39 @@ let sessionToken = localStorage.getItem('agentlink_token') || '';
 let currentUser: any = null;
 const fleetAgents = new Map<string, any>();
 
+// Client Telemetry & Diagnostic Logger
+function clientLog(level: 'info' | 'warn' | 'error' | 'debug', category: string, message: string, details?: any) {
+  const prefix = `[${category.toUpperCase()}]`;
+  if (level === 'error') console.error(prefix, message, details || '');
+  else if (level === 'warn') console.warn(prefix, message, details || '');
+  else console.log(prefix, message, details || '');
+
+  // Dispatch to server telemetry endpoint asynchronously (fire & forget)
+  try {
+    fetch('/api/telemetry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, category, message, details }),
+    }).catch(() => {});
+  } catch {}
+}
+
+// Global unhandled error & rejection listeners to catch any runtime UI errors
+window.addEventListener('error', (event) => {
+  clientLog('error', 'ui_error', event.message, {
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    stack: event.error?.stack,
+  });
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  clientLog('error', 'unhandled_promise', String(event.reason), {
+    reason: event.reason?.stack || event.reason,
+  });
+});
+
 function showNotEnabled(message?: string) {
   notEnabledBanner.classList.remove('hidden');
   notEnabledMessage.textContent = message || 'Not enabled right now';
@@ -110,6 +143,7 @@ async function apiRequest(path: string, options: RequestInit = {}): Promise<any>
 
 // 1. Google Sign-In Flow & Handlers
 function openGoogleConsentModal() {
+  clientLog('info', 'auth_ui', 'Opening Google Account Chooser & Permissions Consent modal');
   hideNotEnabled();
   googleAccountChooserView?.classList.remove('hidden');
   googleAnotherAccountView?.classList.add('hidden');
@@ -118,10 +152,12 @@ function openGoogleConsentModal() {
 }
 
 function closeGoogleConsentModal() {
+  clientLog('info', 'auth_ui', 'Closing Google Account Chooser modal');
   googleConsentModal?.classList.add('hidden');
 }
 
 async function handleGoogleLogin(emailParam?: string) {
+  clientLog('info', 'auth', 'handleGoogleLogin triggered', { emailParam: emailParam || null });
   hideNotEnabled();
   closeGoogleConsentModal();
 
@@ -132,10 +168,12 @@ async function handleGoogleLogin(emailParam?: string) {
 
   // If no email provided, open the authentic Google Account Chooser & Consent modal
   if (!email) {
+    clientLog('info', 'auth', 'No pre-selected email; displaying Google Account Chooser modal');
     openGoogleConsentModal();
     return;
   }
 
+  clientLog('info', 'auth', `Attempting Google authentication for ${email}`);
   try {
     const res = await apiRequest('/api/auth/google', {
       method: 'POST',
@@ -147,9 +185,14 @@ async function handleGoogleLogin(emailParam?: string) {
     });
 
     if (res.authenticated && res.token) {
+      clientLog('info', 'auth', `Google authentication succeeded for ${email}`, { user: res.user?.id });
       unlockDashboard(res.user, res.token);
     }
   } catch (err: any) {
+    clientLog('warn', 'auth', `Google authentication failed or rejected for ${email}`, {
+      status: err.status,
+      error: err.data?.error || err.message,
+    });
     if (err.data?.error === 'not_enabled' || err.status === 403) {
       showNotEnabled(err.data?.message || 'Not enabled right now');
     } else {
@@ -160,14 +203,17 @@ async function handleGoogleLogin(emailParam?: string) {
 
 // Google Consent Modal Event Listeners
 btnConfirmGoogleConsent?.addEventListener('click', () => {
+  clientLog('info', 'auth_ui', 'Clicked "Continue as Carl" consent button');
   handleGoogleLogin('cbellingan@gmail.com');
 });
 
 googleAccountCarl?.addEventListener('click', () => {
+  clientLog('info', 'auth_ui', 'Selected Carl Bellingan account card');
   handleGoogleLogin('cbellingan@gmail.com');
 });
 
 btnUseAnotherGoogleAccount?.addEventListener('click', () => {
+  clientLog('info', 'auth_ui', 'Selected "Use another account"');
   googleAccountChooserView?.classList.add('hidden');
   googleAnotherAccountView?.classList.remove('hidden');
   inputAnotherGoogleEmail?.focus();
@@ -185,6 +231,7 @@ btnCancelGoogleConsent?.addEventListener('click', () => {
 formAnotherGoogleAccount?.addEventListener('submit', (e) => {
   e.preventDefault();
   const enteredEmail = inputAnotherGoogleEmail?.value.trim();
+  clientLog('info', 'auth_ui', 'Submitted alternate Google account form', { email: enteredEmail });
   if (enteredEmail) {
     handleGoogleLogin(enteredEmail);
   }
@@ -197,6 +244,7 @@ formCredentialLogin?.addEventListener('submit', async (e) => {
 
   const email = inputEmail.value.trim();
   const password = inputPassword.value.trim();
+  clientLog('info', 'auth', `Credential login attempt for ${email}`);
 
   try {
     const res = await apiRequest('/api/auth/login', {
@@ -206,9 +254,11 @@ formCredentialLogin?.addEventListener('submit', async (e) => {
     });
 
     if (res.authenticated && res.token) {
+      clientLog('info', 'auth', `Credential login succeeded for ${email}`);
       unlockDashboard(res.user, res.token);
     }
   } catch (err: any) {
+    clientLog('warn', 'auth', `Credential login failed for ${email}`, { error: err.message });
     if (err.data?.error === 'not_enabled' || err.status === 403) {
       showNotEnabled(err.data?.message || 'Not enabled right now');
     } else {
@@ -217,7 +267,10 @@ formCredentialLogin?.addEventListener('submit', async (e) => {
   }
 });
 
-btnGoogleSignIn?.addEventListener('click', () => handleGoogleLogin());
+btnGoogleSignIn?.addEventListener('click', () => {
+  clientLog('info', 'auth_ui', 'Clicked "Sign in with Google" button on landing gate');
+  handleGoogleLogin();
+});
 
 btnSignOut?.addEventListener('click', async () => {
   try {
@@ -819,23 +872,30 @@ async function refreshDashboard() {
 
 // 6. Initialization
 window.addEventListener('DOMContentLoaded', async () => {
+  clientLog('info', 'lifecycle', 'Application DOM loaded and initialized');
   const urlParams = new URLSearchParams(window.location.search);
   const autoAuth = urlParams.get('auto_auth');
 
   if (autoAuth === 'admin') {
+    clientLog('info', 'lifecycle', 'Auto-authenticating as admin');
     await handleGoogleLogin('cbellingan@gmail.com');
   } else if (sessionToken) {
+    clientLog('info', 'lifecycle', 'Found existing session token, verifying with server');
     try {
       const res = await apiRequest('/api/auth/me');
       if (res.status === 'ok' && res.user && res.user.email === 'cbellingan@gmail.com') {
+        clientLog('info', 'lifecycle', 'Session valid; unlocking dashboard');
         unlockDashboard(res.user, sessionToken);
       } else {
+        clientLog('warn', 'lifecycle', 'Session invalid or not admin; locking landing');
         lockLanding();
       }
     } catch {
+      clientLog('warn', 'lifecycle', 'Failed to verify session; locking landing');
       lockLanding();
     }
   } else {
+    clientLog('info', 'lifecycle', 'No existing session; landing gate active');
     lockLanding();
   }
 });

@@ -67,3 +67,15 @@ export interface AccessLogEntry {
   userAgent?: string;
   securityNote?: string;
 }
+
+export interface ClientLogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  category: string;
+  message: string;
+  details?: any;
+  userAgent?: string;
+  ip?: string;
+}
+
