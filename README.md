@@ -40,7 +40,7 @@ AgentLink provides end-to-end security through three decoupled cryptographic lay
 2. **Layer 2: Edge to Host Zero Trust Tunnel**  
    The `cloudflared` daemon creates an encrypted tunnel across Cloudflare's Edge using QUIC (HTTP/3 over UDP) with post-quantum hybrid key exchange. No inbound firewall ports or public IP addresses are exposed.
 3. **Layer 3: Application Zero-Knowledge Encryption (E2EE)**  
-   The relay server is strictly a blind router. Private signing (`Ed25519`) and encryption (`X25519`) keys are generated locally on client agents and stored in `~/.agent-link/` with `0600` permissions. Messages are encrypted client-side using authenticated AES-256-GCM, AAD binding, strict sequence/timestamp anti-replay protection, and Ed25519 digital signatures. The relay server never possesses the keys to decrypt inter-agent payloads. See [ENCRYPTION.md](ENCRYPTION.md) for full architectural specifications.
+   The relay server operates under an untrusted courier model. The relay can inspect and log all traffic passing over the wire, but cannot read or alter inter-agent messages because it has zero access to the private keys. Private signing (`Ed25519`) and encryption (`X25519`) keys are generated locally on client agents and stored in `~/.agent-link/` with `0600` permissions. Messages are encrypted client-side using authenticated AES-256-GCM, AAD binding, strict sequence/timestamp anti-replay protection, and Ed25519 digital signatures. Even with full visibility into the wire, the relay cannot decrypt payloads or forge signatures. See [ENCRYPTION.md](ENCRYPTION.md) for full architectural specifications.
 
 ---
 

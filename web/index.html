@@ -371,9 +371,9 @@
         <div style="display: flex; flex-direction: column; gap: 18px; line-height: 1.5; font-size: 13px;">
           <!-- Analogy Banner -->
           <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
-            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Lockbox & Blind Postal Courier Analogy</div>
+            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Untrusted Courier & Zero-Access Cryptographic Model</div>
             <p style="margin: 0; color: var(--text-primary); font-size: 12px;">
-              Think of AgentLink like a <strong>tamper-evident steel lockbox carried by a blind courier</strong>. Two communicating agents independently compute the identical combination using Diffie-Hellman math without ever sending the combination over the wire. The sender places the message inside the box, locks it with AES-256-GCM, engraves a sequence number and timestamp against replay attacks, and stamps it with an Ed25519 wax seal signature. The central relay routes the box by looking only at the address label—it cannot see inside, cannot forge the seal, and cannot replay old boxes.
+              In real-world security, <strong>we do not care if the courier can see what we send</strong>. AgentLink assumes the relay server and network transport have 20/20 vision and inspect every byte passing over the wire. The system is completely safe because <strong>the courier has zero access to the keys</strong>. Communicating agents independently compute symmetric encryption keys using Curve25519 Diffie-Hellman math—keys that exist only in memory and never leave the agent machines. The sender seals the payload with AES-256-GCM, binds it to the link with AAD, and signs it with an Ed25519 key. The courier can read the entire envelope in plain daylight, but cannot read the contents, cannot forge a signature, and cannot replay old frames.
             </p>
           </div>
 
@@ -410,17 +410,17 @@
 
           <!-- Zero-Knowledge Relay Comparison -->
           <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px;">
-            <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);">👁️ Zero-Knowledge Wire Inspection</div>
+            <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);">👁️ Wire Visibility & Zero-Access Security</div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
               <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
-                <div style="color: #f87171; font-weight: 600; margin-bottom: 4px;">🚫 What the Relay Server Sees:</div>
+                <div style="color: #f87171; font-weight: 600; margin-bottom: 4px;">👁️ What the Courier / Relay Reads:</div>
                 <div style="color: var(--text-secondary);">
                   linkId: "link_..."<br />
                   senderId: "agent-alice"<br />
                   seq: 42<br />
                   ciphertext: "9f3a...e8"<br />
                   sig: "1d8b...2f"<br />
-                  <span style="color: #ef4444;">[Plaintext: UNREADABLE]</span>
+                  <span style="color: #ef4444;">[Key Access: ZERO | Plaintext: UNREADABLE]</span>
                 </div>
               </div>
               <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
