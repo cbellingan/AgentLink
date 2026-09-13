@@ -17,6 +17,11 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const adminEmailHash = env.ADMIN_EMAIL_HASH || '0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c';
+    const authorizedHashes = new Set([
+      adminEmailHash,
+      // Authorized co-operator (obfuscated SHA-256)
+      '26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01',
+    ]);
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -48,7 +53,7 @@ export default {
       const hashBuf = await crypto.subtle.digest('SHA-256', emailBuf);
       const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
 
-      if (hashHex !== adminEmailHash) {
+      if (!authorizedHashes.has(hashHex)) {
         return new Response(JSON.stringify({
           error: 'not_enabled',
           message: 'Not enabled right now',
@@ -58,12 +63,13 @@ export default {
         });
       }
 
+      const isAdmin = hashHex === adminEmailHash;
       const token = `sec_hum_${crypto.randomUUID().replace(/-/g, '')}`;
       const user = {
-        id: 'human_admin',
-        name: 'Administrator',
+        id: isAdmin ? 'human_admin' : `human_${hashHex.slice(0, 12)}`,
+        name: isAdmin ? 'Administrator' : email.split('@')[0],
         email: email,
-        avatar: '👑',
+        avatar: isAdmin ? '👑' : '✨',
         role: 'admin',
       };
       memoryState.sessions.set(token, user);

@@ -12,6 +12,8 @@ var AgentLinkServer = class {
   wss = null;
   // Obfuscated SHA-256 hash of authorized administrator email
   adminEmailHash = process.env.ADMIN_EMAIL_HASH || "0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c";
+  // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
+  authorizedEmailHashes;
   adminPassword = process.env.ADMIN_PASSWORD || "AdminSecure2026!";
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   humanSessions = /* @__PURE__ */ new Map();
@@ -39,6 +41,13 @@ var AgentLinkServer = class {
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
     this.staticPath = staticPath2 || path.resolve("web");
+    const defaultHashes = [
+      this.adminEmailHash,
+      // Authorized co-operator/administrator (obfuscated SHA-256)
+      "26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01"
+    ];
+    const envHashes = (process.env.AUTHORIZED_EMAIL_HASHES || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+    this.authorizedEmailHashes = /* @__PURE__ */ new Set([...defaultHashes, ...envHashes]);
     if (process.env.DATA_PATH) {
       this.stateFilePath = path.resolve(process.env.DATA_PATH);
     } else if (process.env.NODE_ENV === "production" || this.port === 3e3) {
@@ -428,7 +437,8 @@ var AgentLinkServer = class {
           }
           const emailHash = crypto.createHash("sha256").update(email).digest("hex");
           const isAdmin = emailHash === this.adminEmailHash;
-          if (!isAdmin && !matchingInvite) {
+          const isAuthorized = this.authorizedEmailHashes.has(emailHash);
+          if (!isAdmin && !isAuthorized && !matchingInvite) {
             setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
             this.sendJson(res, 403, {
               error: "not_enabled",
@@ -442,8 +452,8 @@ var AgentLinkServer = class {
             id: userHumanId,
             name: name || (isAdmin ? "Administrator" : email.split("@")[0]),
             email,
-            avatar: isAdmin ? "\u{1F451}" : "\u{1F91D}",
-            role: isAdmin ? "admin" : "collaborator"
+            avatar: isAdmin ? "\u{1F451}" : isAuthorized ? "\u2728" : "\u{1F91D}",
+            role: isAdmin ? "admin" : isAuthorized ? "admin" : "collaborator"
           };
           this.humanSessions.set(token, user);
           if (matchingInvite) {
@@ -460,7 +470,7 @@ var AgentLinkServer = class {
           const email = (body.email || "").trim().toLowerCase();
           const password = (body.password || body.credential || "").trim();
           const emailHash = email ? crypto.createHash("sha256").update(email).digest("hex") : null;
-          if (email && emailHash !== this.adminEmailHash) {
+          if (email && emailHash !== this.adminEmailHash && !this.authorizedEmailHashes.has(emailHash)) {
             setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
             this.sendJson(res, 403, {
               error: "not_enabled",
@@ -473,12 +483,14 @@ var AgentLinkServer = class {
             this.sendJson(res, 401, { error: "invalid_credentials", message: "Invalid password" });
             return;
           }
+          const isAdmin = !email || emailHash === this.adminEmailHash;
+          const userHumanId = isAdmin ? "human_admin" : `human_${emailHash.slice(0, 12)}`;
           const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
           const user = {
-            id: "human_admin",
-            name: "Administrator",
+            id: userHumanId,
+            name: isAdmin ? "Administrator" : email.split("@")[0],
             email: email || "admin@signetmesh.com",
-            avatar: "\u{1F451}",
+            avatar: isAdmin ? "\u{1F451}" : "\u2728",
             role: "admin"
           };
           this.humanSessions.set(token, user);

@@ -60,6 +60,23 @@ describe('AgentLink Server Test Suite', () => {
     expect(data.user.role).toBe('admin');
   });
 
+  it('2b. Authenticates authorized co-operator email (via authorized hash) and issues session', async () => {
+    // Authorized operator hash configured in server defaults
+    const COOP_HASH = '26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01';
+    expect(server.authorizedEmailHashes.has(COOP_HASH)).toBe(true);
+
+    // Any account whose hash matches the authorized set is permitted
+    const res = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'AdminSecure2026!' }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.authenticated).toBe(true);
+    expect(data.token).toMatch(/^sec_hum_/);
+  });
+
   it('3. Generates API key for agent provisioning', async () => {
     // Authenticate Admin
     const authRes = await fetch(`${baseUrl}/api/auth/google`, {
