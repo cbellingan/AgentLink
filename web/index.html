@@ -51,6 +51,12 @@
           <label for="inputPassword" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Password / Admin Key</label>
           <input type="password" id="inputPassword" placeholder="Enter password..." required style="width: 100%; padding: 10px 12px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);" data-testid="input-password" />
         </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="checkRememberMe" style="cursor: pointer; accent-color: var(--accent);" data-testid="check-remember-me" checked />
+          <label for="checkRememberMe" style="font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none;">
+            Remember my email
+          </label>
+        </div>
         <button type="submit" id="btnLoginSubmit" class="btn" style="width: 100%; justify-content: center; padding: 10px;" data-testid="btn-login-submit">
           🔐 Sign In
         </button>
@@ -333,6 +339,13 @@
           <div>
             <label for="inputGoogleEmail" style="display: block; font-size: 12px; color: #5f6368; margin-bottom: 6px;">Email or phone</label>
             <input type="email" id="inputGoogleEmail" required placeholder="name@gmail.com" style="width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #dadce0; border-radius: 6px; color: #202124; box-sizing: border-box;" />
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="checkGoogleRememberMe" style="cursor: pointer; accent-color: #1a73e8;" data-testid="check-google-remember-me" checked />
+            <label for="checkGoogleRememberMe" style="font-size: 12px; color: #5f6368; cursor: pointer; user-select: none;">
+              Remember my email
+            </label>
           </div>
 
           <!-- Permissions info -->

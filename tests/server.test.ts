@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { AgentLinkServer } from '../server/agent-link-server.js';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+
+const TEST_ADMIN_EMAIL = 'admin@signetmesh.local';
 
 describe('AgentLink Server Test Suite', () => {
   let server: AgentLinkServer;
@@ -14,6 +17,7 @@ describe('AgentLink Server Test Suite', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlink-server-test-'));
     process.env.DATA_PATH = path.join(tempDir, 'state.json');
     process.env.NODE_ENV = 'test';
+    process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
 
     server = new AgentLinkServer(0);
     port = await server.listen();
@@ -27,7 +31,7 @@ describe('AgentLink Server Test Suite', () => {
     }
   });
 
-  it('1. Rejects Google sign-in for any account other than cbellingan@gmail.com with "Not enabled right now"', async () => {
+  it('1. Rejects Google sign-in for any unlisted account with "Not enabled right now"', async () => {
     const res = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -40,11 +44,11 @@ describe('AgentLink Server Test Suite', () => {
     expect(data.message).toBe('Not enabled right now');
   });
 
-  it('2. Authenticates cbellingan@gmail.com and issues admin session token', async () => {
+  it('2. Authenticates authorized administrator email and issues admin session token', async () => {
     const res = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
     });
 
     expect(res.status).toBe(200);
@@ -52,16 +56,16 @@ describe('AgentLink Server Test Suite', () => {
     expect(data.status).toBe('ok');
     expect(data.authenticated).toBe(true);
     expect(data.token).toMatch(/^sec_hum_/);
-    expect(data.user.email).toBe('cbellingan@gmail.com');
+    expect(data.user.email).toBe(TEST_ADMIN_EMAIL);
     expect(data.user.role).toBe('admin');
   });
 
   it('3. Generates API key for agent provisioning', async () => {
-    // Authenticate Carl
+    // Authenticate Admin
     const authRes = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
     }).then(r => r.json());
 
     const token = authRes.token;
@@ -106,11 +110,11 @@ describe('AgentLink Server Test Suite', () => {
   });
 
   it('5. Successfully registers agent when valid API key is presented', async () => {
-    // 1. Generate key as Carl
+    // 1. Generate key as Admin
     const authRes = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
     }).then(r => r.json());
 
     const keyRes = await fetch(`${baseUrl}/api/keys/generate`, {

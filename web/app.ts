@@ -9,10 +9,34 @@ const btnGoogleSignIn = document.getElementById('btnGoogleSignIn')!;
 const formCredentialLogin = document.getElementById('formCredentialLogin') as HTMLFormElement;
 const inputEmail = document.getElementById('inputEmail') as HTMLInputElement;
 const inputPassword = document.getElementById('inputPassword') as HTMLInputElement;
+const checkRememberMe = document.getElementById('checkRememberMe') as HTMLInputElement | null;
 
 const userName = document.getElementById('userName')!;
 const userEmail = document.getElementById('userEmail')!;
 const btnSignOut = document.getElementById('btnSignOut')!;
+
+// Cookie helper functions for 'Remember Me'
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
+  return match ? decodeURIComponent(match[3]) : null;
+}
+
+function setCookie(name: string, value: string, days: number = 365) {
+  const maxAge = days > 0 ? days * 86400 : 0;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+}
+
+function deleteCookie(name: string) {
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function saveRememberedEmail(email: string, shouldRemember: boolean) {
+  if (shouldRemember && email) {
+    setCookie('agentlink_remember_email', email.trim(), 365);
+  } else {
+    deleteCookie('agentlink_remember_email');
+  }
+}
 
 // API Keys UI
 const btnGenerateKey = document.getElementById('btnGenerateKey')!;
@@ -39,6 +63,7 @@ const btnCopyModalQrJson = document.getElementById('btnCopyModalQrJson')!;
 const googleConsentModal = document.getElementById('googleConsentModal')!;
 const formGoogleSignInModal = document.getElementById('formGoogleSignInModal') as HTMLFormElement;
 const inputGoogleEmail = document.getElementById('inputGoogleEmail') as HTMLInputElement;
+const checkGoogleRememberMe = document.getElementById('checkGoogleRememberMe') as HTMLInputElement | null;
 const btnCancelGoogleConsent = document.getElementById('btnCancelGoogleConsent')!;
 
 // About & Architecture Modal
@@ -156,10 +181,9 @@ function openGoogleConsentModal() {
 function closeGoogleConsentModal() {
   clientLog('info', 'auth_ui', 'Closing Google Sign-In modal');
   googleConsentModal?.classList.add('hidden');
-  if (inputGoogleEmail) inputGoogleEmail.value = '';
 }
 
-async function handleGoogleLogin(emailParam?: string) {
+async function handleGoogleLogin(emailParam?: string, shouldRemember?: boolean) {
   clientLog('info', 'auth', 'handleGoogleLogin triggered', { emailParam: emailParam || null });
   hideNotEnabled();
   closeGoogleConsentModal();
@@ -175,6 +199,11 @@ async function handleGoogleLogin(emailParam?: string) {
     openGoogleConsentModal();
     return;
   }
+
+  const remember = shouldRemember !== undefined
+    ? shouldRemember
+    : (checkRememberMe ? checkRememberMe.checked : true);
+  saveRememberedEmail(email, remember);
 
   clientLog('info', 'auth', `Attempting Google authentication for ${email}`);
   try {
@@ -208,9 +237,10 @@ async function handleGoogleLogin(emailParam?: string) {
 formGoogleSignInModal?.addEventListener('submit', (e) => {
   e.preventDefault();
   const enteredEmail = inputGoogleEmail?.value.trim();
-  clientLog('info', 'auth_ui', 'Submitted Google Sign-In form', { email: enteredEmail });
+  const remember = checkGoogleRememberMe ? checkGoogleRememberMe.checked : true;
+  clientLog('info', 'auth_ui', 'Submitted Google Sign-In form', { email: enteredEmail, remember });
   if (enteredEmail) {
-    handleGoogleLogin(enteredEmail);
+    handleGoogleLogin(enteredEmail, remember);
   }
 });
 
@@ -366,6 +396,8 @@ formCredentialLogin?.addEventListener('submit', async (e) => {
 
   const email = inputEmail.value.trim();
   const password = inputPassword.value.trim();
+  const remember = checkRememberMe ? checkRememberMe.checked : true;
+  saveRememberedEmail(email, remember);
   clientLog('info', 'auth', `Credential login attempt for ${email}`);
 
   try {
@@ -1137,6 +1169,29 @@ async function refreshDashboard() {
 // 6. Initialization
 window.addEventListener('DOMContentLoaded', async () => {
   clientLog('info', 'lifecycle', 'Application DOM loaded and initialized');
+
+  // Pre-fill remembered email from client-side cookie
+  const initialRememberedEmail = getCookie('agentlink_remember_email');
+  if (initialRememberedEmail) {
+    if (inputEmail) inputEmail.value = initialRememberedEmail;
+    if (inputGoogleEmail) inputGoogleEmail.value = initialRememberedEmail;
+    if (checkRememberMe) checkRememberMe.checked = true;
+    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = true;
+  }
+
+  // Bidirectional synchronization between email inputs and checkboxes
+  inputEmail?.addEventListener('input', () => {
+    if (inputGoogleEmail) inputGoogleEmail.value = inputEmail.value;
+  });
+  inputGoogleEmail?.addEventListener('input', () => {
+    if (inputEmail) inputEmail.value = inputGoogleEmail.value;
+  });
+  checkRememberMe?.addEventListener('change', () => {
+    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = checkRememberMe.checked;
+  });
+  checkGoogleRememberMe?.addEventListener('change', () => {
+    if (checkRememberMe) checkRememberMe.checked = checkGoogleRememberMe.checked;
+  });
 
   const urlParams = new URLSearchParams(window.location.search);
   const inviteToken = urlParams.get('invite');

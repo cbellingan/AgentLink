@@ -91,13 +91,24 @@ async function run() {
     }
   });
 
-  // 3. Authorized Human Login (Carl Bellingan)
-  await testEndpoint('3. Authorized Human Authentication (Carl Bellingan)', async () => {
-    const res = await safeFetch(`${target}/api/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
-    });
+  // 3. Authorized Human Authentication
+  await testEndpoint('3. Authorized Human Authentication (Admin Gatekeeper)', async () => {
+    let res;
+    if (process.env.ADMIN_EMAIL) {
+      res = await safeFetch(`${target}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: process.env.ADMIN_EMAIL }),
+      });
+    } else {
+      res = await safeFetch(`${target}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: process.env.ADMIN_PASSWORD || 'AdminSecure2026!',
+        }),
+      });
+    }
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const rawText = await res.text();
     verifyHeaders(res, rawText);

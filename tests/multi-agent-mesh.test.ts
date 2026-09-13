@@ -2,18 +2,20 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { AgentLinkServer } from '../server/agent-link-server.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
 const execFileAsync = promisify(execFile);
+const TEST_ADMIN_EMAIL = 'admin@mesh.local';
 
 describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
   let server: AgentLinkServer;
   let port: number;
   let baseUrl: string;
   let tempDir: string;
-  let carlToken: string;
+  let adminToken: string;
   const agents = ['mesh-alice', 'mesh-bob', 'mesh-charlie', 'mesh-dave'];
   const apiKeys: Record<string, string> = {};
   const links: Record<string, string> = {};
@@ -22,18 +24,19 @@ describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-mesh-test-'));
     process.env.DATA_PATH = path.join(tempDir, 'state.json');
     process.env.NODE_ENV = 'test';
+    process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
 
     server = new AgentLinkServer(0);
     port = await server.listen();
     baseUrl = `http://127.0.0.1:${port}`;
 
-    // 1. Authenticate Carl
+    // 1. Authenticate Admin
     const authRes = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
     }).then(r => r.json());
-    carlToken = authRes.token;
+    adminToken = authRes.token;
 
     // 2. Generate API keys for all 4 mesh agents
     for (const agentId of agents) {
@@ -41,7 +44,7 @@ describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${carlToken}`,
+          'Authorization': `Bearer ${adminToken}`,
         },
         body: JSON.stringify({ label: `Key for ${agentId}` }),
       }).then(r => r.json());

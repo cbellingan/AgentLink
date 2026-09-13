@@ -3,7 +3,7 @@
  */
 
 export interface Env {
-  ADMIN_EMAIL?: string;
+  ADMIN_EMAIL_HASH?: string;
 }
 
 const memoryState = {
@@ -16,7 +16,7 @@ const memoryState = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const adminEmail = env.ADMIN_EMAIL || 'cbellingan@gmail.com';
+    const adminEmailHash = env.ADMIN_EMAIL_HASH || '0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c';
 
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
@@ -32,7 +32,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/api/server-info') {
       return new Response(JSON.stringify({
         name: 'AgentLink Cloudflare Worker',
-        adminEmail,
+        adminConfigured: true,
         version: '1.0.0',
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -44,7 +44,11 @@ export default {
       const body: any = await request.json().catch(() => ({}));
       const email = (body.email || '').trim().toLowerCase();
 
-      if (email !== adminEmail) {
+      const emailBuf = new TextEncoder().encode(email);
+      const hashBuf = await crypto.subtle.digest('SHA-256', emailBuf);
+      const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+      if (hashHex !== adminEmailHash) {
         return new Response(JSON.stringify({
           error: 'not_enabled',
           message: 'Not enabled right now',
@@ -56,9 +60,9 @@ export default {
 
       const token = `sec_hum_${crypto.randomUUID().replace(/-/g, '')}`;
       const user = {
-        id: 'human_carl',
-        name: 'Carl Bellingan',
-        email: adminEmail,
+        id: 'human_admin',
+        name: 'Administrator',
+        email: email,
         avatar: '👑',
         role: 'admin',
       };
@@ -122,7 +126,7 @@ export default {
       const agentId = body.id || `agent_${crypto.randomUUID().substring(0, 8)}`;
       const agentRecord = {
         id: agentId,
-        ownerHumanId: 'human_carl',
+        ownerHumanId: 'human_admin',
         registeredAt: new Date().toISOString(),
         signPub: body.signPub,
         encPub: body.encPub,

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
+import * as crypto from 'node:crypto';
 import { AgentLinkServer } from '../server/agent-link-server.js';
+
+const TEST_ADMIN_EMAIL = 'admin@test.local';
 
 describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zero-Noise Isolation', () => {
   let server: AgentLinkServer;
@@ -8,6 +11,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
   let baseUrl: string;
 
   beforeAll(async () => {
+    process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
     server = new AgentLinkServer(0);
     serverPort = await server.listen();
     baseUrl = `http://127.0.0.1:${serverPort}`;
@@ -71,17 +75,17 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
   let wifeToken: string;
   let wifeId: string;
   let wifeApiKey: string;
-  let carlApiKey: string;
+  let adminApiKey: string;
   let linkId: string;
 
-  it('1. Admin (Carl) signs in successfully, but uninvited collaborator is blocked at gatekeeper', async () => {
-    // Carl signs in
-    const carlRes = await apiPost('/api/auth/google', { email: 'cbellingan@gmail.com', name: 'Carl Bellingan' });
-    expect(carlRes.status).toBe(200);
-    expect(carlRes.data.authenticated).toBe(true);
-    expect(carlRes.data.user.role).toBe('admin');
-    adminToken = carlRes.data.token;
-    adminId = carlRes.data.user.id;
+  it('1. Admin signs in successfully, but uninvited collaborator is blocked at gatekeeper', async () => {
+    // Admin signs in
+    const adminRes = await apiPost('/api/auth/google', { email: TEST_ADMIN_EMAIL, name: 'Primary Administrator' });
+    expect(adminRes.status).toBe(200);
+    expect(adminRes.data.authenticated).toBe(true);
+    expect(adminRes.data.user.role).toBe('admin');
+    adminToken = adminRes.data.token;
+    adminId = adminRes.data.user.id;
 
     // Uninvited collaborator attempts login
     const strangerRes = await apiPost('/api/auth/google', { email: 'stranger@example.com', name: 'Stranger' });
@@ -107,7 +111,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     // Wife logs in using the invite
     const wifeRes = await apiPost('/api/auth/google', {
       email: 'wife@example.com',
-      name: 'Wife Bellingan',
+      name: 'Secondary Collaborator',
       inviteToken,
     });
     expect(wifeRes.status).toBe(200);
@@ -120,34 +124,34 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
   });
 
   it('3. Both humans generate scoped API keys; keys are strictly mapped to their ownerHumanId', async () => {
-    // Carl generates key
-    const carlKeyRes = await apiPost('/api/keys', { label: 'Carl Laptop Agent' }, adminToken);
-    expect(carlKeyRes.status).toBe(201);
-    carlApiKey = carlKeyRes.data.apiKey.key;
-    expect(carlKeyRes.data.apiKey.ownerHumanId).toBe(adminId);
+    // Admin generates key
+    const adminKeyRes = await apiPost('/api/keys', { label: 'Admin Primary Agent' }, adminToken);
+    expect(adminKeyRes.status).toBe(201);
+    adminApiKey = adminKeyRes.data.apiKey.key;
+    expect(adminKeyRes.data.apiKey.ownerHumanId).toBe(adminId);
 
     // Wife generates key
     const wifeKeyRes = await apiPost('/api/keys', { label: 'Wife Phone Agent' }, wifeToken);
     expect(wifeKeyRes.status).toBe(201);
     wifeApiKey = wifeKeyRes.data.apiKey.key;
     expect(wifeKeyRes.data.apiKey.ownerHumanId).toBe(wifeId);
-    expect(wifeApiKey).not.toBe(carlApiKey);
+    expect(wifeApiKey).not.toBe(adminApiKey);
 
     // Verify key scoping: Wife can only see her key
     const wifeKeysList = await apiGet('/api/keys', wifeToken);
     expect(wifeKeysList.status).toBe(200);
     expect(wifeKeysList.data.keys.some((k: any) => k.key === wifeApiKey)).toBe(true);
-    expect(wifeKeysList.data.keys.some((k: any) => k.key === carlApiKey)).toBe(false);
+    expect(wifeKeysList.data.keys.some((k: any) => k.key === adminApiKey)).toBe(false);
   });
 
   it('4. Agents register using their respective API keys; ownerHumanId is bound server-side', async () => {
-    // Register Agent Alice under Carl's key
+    // Register Agent Alice under Admin's key
     const aliceRes = await apiPost('/api/agents/register', {
       id: 'agent-alice',
       signPub: 'alice_sign_pub_key_123',
       encPub: 'alice_enc_pub_key_123',
       kid: 'kid-alice-001',
-    }, carlApiKey);
+    }, adminApiKey);
     expect(aliceRes.status).toBe(200);
     expect(aliceRes.data.agent.ownerHumanId).toBe(adminId);
 
@@ -161,13 +165,13 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(bobRes.status).toBe(200);
     expect(bobRes.data.agent.ownerHumanId).toBe(wifeId);
 
-    // Register Agent Charlie under Carl's key (for cross-link isolation probe)
+    // Register Agent Charlie under Admin's key (for cross-link isolation probe)
     const charlieRes = await apiPost('/api/agents/register', {
       id: 'agent-charlie',
       signPub: 'charlie_sign_pub_789',
       encPub: 'charlie_enc_pub_789',
       kid: 'kid-charlie-003',
-    }, carlApiKey);
+    }, adminApiKey);
     expect(charlieRes.status).toBe(200);
     expect(charlieRes.data.agent.ownerHumanId).toBe(adminId);
   });
@@ -205,11 +209,11 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(bobPoll.data.messages.length).toBe(0);
   });
 
-  it('7. Partial Approval (1/2): Carl approves, but link remains pending_approval and traffic is STILL blocked', async () => {
-    // Carl approves
-    const carlApproveRes = await apiPost(`/api/links/${linkId}/approve`, {}, adminToken);
-    expect(carlApproveRes.status).toBe(200);
-    const link = carlApproveRes.data.link;
+  it('7. Partial Approval (1/2): Admin approves, but link remains pending_approval and traffic is STILL blocked', async () => {
+    // Admin approves
+    const adminApproveRes = await apiPost(`/api/links/${linkId}/approve`, {}, adminToken);
+    expect(adminApproveRes.status).toBe(200);
+    const link = adminApproveRes.data.link;
     expect(link.approvals[adminId]).toBe(true);
     expect(link.approvals[wifeId]).toBe(false);
     expect(link.status).toBe('pending_approval');

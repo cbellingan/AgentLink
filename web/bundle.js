@@ -2112,9 +2112,28 @@ var btnGoogleSignIn = document.getElementById("btnGoogleSignIn");
 var formCredentialLogin = document.getElementById("formCredentialLogin");
 var inputEmail = document.getElementById("inputEmail");
 var inputPassword = document.getElementById("inputPassword");
+var checkRememberMe = document.getElementById("checkRememberMe");
 var userName = document.getElementById("userName");
 var userEmail = document.getElementById("userEmail");
 var btnSignOut = document.getElementById("btnSignOut");
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp("(^|;\\s*)(" + name + ")=([^;]*)"));
+  return match ? decodeURIComponent(match[3]) : null;
+}
+function setCookie(name, value, days = 365) {
+  const maxAge = days > 0 ? days * 86400 : 0;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+}
+function deleteCookie(name) {
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+}
+function saveRememberedEmail(email, shouldRemember) {
+  if (shouldRemember && email) {
+    setCookie("agentlink_remember_email", email.trim(), 365);
+  } else {
+    deleteCookie("agentlink_remember_email");
+  }
+}
 var btnGenerateKey = document.getElementById("btnGenerateKey");
 var newKeyBanner = document.getElementById("newKeyBanner");
 var newKeyValue = document.getElementById("newKeyValue");
@@ -2133,6 +2152,7 @@ var btnCopyModalQrJson = document.getElementById("btnCopyModalQrJson");
 var googleConsentModal = document.getElementById("googleConsentModal");
 var formGoogleSignInModal = document.getElementById("formGoogleSignInModal");
 var inputGoogleEmail = document.getElementById("inputGoogleEmail");
+var checkGoogleRememberMe = document.getElementById("checkGoogleRememberMe");
 var btnCancelGoogleConsent = document.getElementById("btnCancelGoogleConsent");
 var aboutModal = document.getElementById("aboutModal");
 var aboutContent = document.getElementById("aboutContent");
@@ -2227,9 +2247,8 @@ function openGoogleConsentModal() {
 function closeGoogleConsentModal() {
   clientLog("info", "auth_ui", "Closing Google Sign-In modal");
   googleConsentModal?.classList.add("hidden");
-  if (inputGoogleEmail) inputGoogleEmail.value = "";
 }
-async function handleGoogleLogin(emailParam) {
+async function handleGoogleLogin(emailParam, shouldRemember) {
   clientLog("info", "auth", "handleGoogleLogin triggered", { emailParam: emailParam || null });
   hideNotEnabled();
   closeGoogleConsentModal();
@@ -2242,6 +2261,8 @@ async function handleGoogleLogin(emailParam) {
     openGoogleConsentModal();
     return;
   }
+  const remember = shouldRemember !== void 0 ? shouldRemember : checkRememberMe ? checkRememberMe.checked : true;
+  saveRememberedEmail(email, remember);
   clientLog("info", "auth", `Attempting Google authentication for ${email}`);
   try {
     const res = await apiRequest("/api/auth/google", {
@@ -2271,9 +2292,10 @@ async function handleGoogleLogin(emailParam) {
 formGoogleSignInModal?.addEventListener("submit", (e) => {
   e.preventDefault();
   const enteredEmail = inputGoogleEmail?.value.trim();
-  clientLog("info", "auth_ui", "Submitted Google Sign-In form", { email: enteredEmail });
+  const remember = checkGoogleRememberMe ? checkGoogleRememberMe.checked : true;
+  clientLog("info", "auth_ui", "Submitted Google Sign-In form", { email: enteredEmail, remember });
   if (enteredEmail) {
-    handleGoogleLogin(enteredEmail);
+    handleGoogleLogin(enteredEmail, remember);
   }
 });
 btnCancelGoogleConsent?.addEventListener("click", () => {
@@ -2430,6 +2452,8 @@ formCredentialLogin?.addEventListener("submit", async (e) => {
   hideNotEnabled();
   const email = inputEmail.value.trim();
   const password = inputPassword.value.trim();
+  const remember = checkRememberMe ? checkRememberMe.checked : true;
+  saveRememberedEmail(email, remember);
   clientLog("info", "auth", `Credential login attempt for ${email}`);
   try {
     const res = await apiRequest("/api/auth/login", {
@@ -3109,6 +3133,25 @@ async function refreshDashboard() {
 }
 window.addEventListener("DOMContentLoaded", async () => {
   clientLog("info", "lifecycle", "Application DOM loaded and initialized");
+  const initialRememberedEmail = getCookie("agentlink_remember_email");
+  if (initialRememberedEmail) {
+    if (inputEmail) inputEmail.value = initialRememberedEmail;
+    if (inputGoogleEmail) inputGoogleEmail.value = initialRememberedEmail;
+    if (checkRememberMe) checkRememberMe.checked = true;
+    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = true;
+  }
+  inputEmail?.addEventListener("input", () => {
+    if (inputGoogleEmail) inputGoogleEmail.value = inputEmail.value;
+  });
+  inputGoogleEmail?.addEventListener("input", () => {
+    if (inputEmail) inputEmail.value = inputGoogleEmail.value;
+  });
+  checkRememberMe?.addEventListener("change", () => {
+    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = checkRememberMe.checked;
+  });
+  checkGoogleRememberMe?.addEventListener("change", () => {
+    if (checkRememberMe) checkRememberMe.checked = checkGoogleRememberMe.checked;
+  });
   const urlParams = new URLSearchParams(window.location.search);
   const inviteToken = urlParams.get("invite");
   if (inviteToken && !sessionToken) {

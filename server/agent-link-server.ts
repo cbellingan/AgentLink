@@ -16,8 +16,8 @@ export class AgentLinkServer {
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
 
-  // Single Authorized Human (Carl Bellingan)
-  public readonly adminEmail: string = 'cbellingan@gmail.com';
+  // Obfuscated SHA-256 hash of authorized administrator email
+  public readonly adminEmailHash: string = process.env.ADMIN_EMAIL_HASH || '0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c';
   public adminPassword: string = process.env.ADMIN_PASSWORD || 'AdminSecure2026!';
 
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
@@ -156,14 +156,14 @@ export class AgentLinkServer {
       return;
     }
 
-    // 1. Ensure at least one primary API key exists for Carl
+    // 1. Ensure at least one primary API key exists for Administrator
     if (this.apiKeys.size === 0) {
-      const defaultKeyVal = 'sec_apk_carl_fleet_primary';
+      const defaultKeyVal = 'sec_apk_admin_fleet_primary';
       this.apiKeys.set(defaultKeyVal, {
         id: 'key_primary_default',
         key: defaultKeyVal,
-        ownerHumanId: 'human_carl',
-        label: 'Primary Fleet Key (Carl Bellingan)',
+        ownerHumanId: 'human_admin',
+        label: 'Primary Fleet Key (Admin)',
         createdAt: new Date().toISOString(),
       });
     }
@@ -175,28 +175,16 @@ export class AgentLinkServer {
       if (fs.existsSync(keyDir)) {
         const files = fs.readdirSync(keyDir);
         for (const file of files) {
-          if (file.endsWith('.json')) {
-            const lowerFile = file.toLowerCase();
-            // Filter out test artifact keyrings
-            if (
-              lowerFile.includes('test') ||
-              lowerFile.includes('alice') ||
-              lowerFile.includes('bob') ||
-              lowerFile.startsWith('mesh-') ||
-              lowerFile === 'agent.json' ||
-              lowerFile.includes('demo') ||
-              lowerFile.includes('temp')
-            ) {
-              continue;
-            }
+          if (file.endsWith('-keys.json') || file === 'keys.json') {
             try {
-              const content = JSON.parse(fs.readFileSync(path.join(keyDir, file), 'utf8'));
-              const agentId = content.agent_id || file.replace('.json', '');
+              const fullPath = path.join(keyDir, file);
+              const content = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+              const agentId = content.agentId || (file === 'keys.json' ? 'agent' : file.replace('-keys.json', ''));
+              // Exclude test / ephemeral agents from persistent discovery
               const lowerAgentId = agentId.toLowerCase();
               if (
+                lowerAgentId.startsWith('test-') ||
                 lowerAgentId.includes('test') ||
-                lowerAgentId.includes('alice') ||
-                lowerAgentId.includes('bob') ||
                 lowerAgentId.startsWith('mesh-') ||
                 lowerAgentId === 'agent' ||
                 lowerAgentId.includes('demo') ||
@@ -207,7 +195,7 @@ export class AgentLinkServer {
               if (content.signPub && content.encPub && !this.agents.has(agentId)) {
                 const record: AgentRecord = {
                   id: agentId,
-                  ownerHumanId: 'human_carl',
+                  ownerHumanId: 'human_admin',
                   registeredAt: new Date().toISOString(),
                   signPub: content.signPub,
                   encPub: content.encPub,
@@ -247,7 +235,7 @@ export class AgentLinkServer {
           id: linkId,
           agentAId: 'antigravity',
           agentBId: 'ted',
-          initiatorHumanId: 'human_carl',
+          initiatorHumanId: 'human_admin',
           status: 'active',
           createdAt: new Date().toISOString(),
           linkKey: `sec_link_${crypto.randomBytes(16).toString('hex')}`,
@@ -424,7 +412,7 @@ export class AgentLinkServer {
       this.sendJson(res, 200, {
         name: 'AgentLink Zero-Knowledge Relay',
         version: '1.0.0',
-        adminEmail: this.adminEmail,
+        adminConfigured: true,
         port: this.port,
       });
       return;
@@ -454,7 +442,7 @@ export class AgentLinkServer {
     if (req.method === 'POST' && parsedUrl === '/api/auth/google') {
       readJson((body) => {
         let email = (body.email || '').trim().toLowerCase();
-        let name = (body.name || 'Carl Bellingan').trim();
+        let name = (body.name || 'Administrator').trim();
 
         // If a Google JWT ID token credential is provided, decode payload
         if (body.credential && typeof body.credential === 'string') {
@@ -482,8 +470,11 @@ export class AgentLinkServer {
           ) || null;
         }
 
-        // Enforce Carl Bellingan or Invited Collaborator restriction
-        if (email !== this.adminEmail && !matchingInvite) {
+        // Enforce Admin (via obfuscated hash) or Invited Collaborator restriction
+        const emailHash = crypto.createHash('sha256').update(email).digest('hex');
+        const isAdmin = emailHash === this.adminEmailHash;
+
+        if (!isAdmin && !matchingInvite) {
           setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
           this.sendJson(res, 403, {
             error: 'not_enabled',
@@ -492,12 +483,11 @@ export class AgentLinkServer {
           return;
         }
 
-        const isAdmin = email === this.adminEmail;
-        const userHumanId = isAdmin ? 'human_carl' : `human_${crypto.createHash('sha256').update(email).digest('hex').slice(0, 12)}`;
+        const userHumanId = isAdmin ? 'human_admin' : `human_${emailHash.slice(0, 12)}`;
         const token = `sec_hum_${crypto.randomBytes(24).toString('hex')}`;
         const user: HumanUser = {
           id: userHumanId,
-          name: name || (isAdmin ? 'Carl Bellingan' : email.split('@')[0]),
+          name: name || (isAdmin ? 'Administrator' : email.split('@')[0]),
           email: email,
           avatar: isAdmin ? '👑' : '🤝',
           role: isAdmin ? 'admin' : 'collaborator',
@@ -515,13 +505,14 @@ export class AgentLinkServer {
       return;
     }
 
-    // 3. Credential Login endpoint (password fallback for Carl)
+    // 3. Credential Login endpoint (password fallback for Admin)
     if (req.method === 'POST' && parsedUrl === '/api/auth/login') {
       readJson((body) => {
         const email = (body.email || '').trim().toLowerCase();
         const password = (body.password || body.credential || '').trim();
+        const emailHash = email ? crypto.createHash('sha256').update(email).digest('hex') : null;
 
-        if (email !== this.adminEmail) {
+        if (email && emailHash !== this.adminEmailHash) {
           setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
           this.sendJson(res, 403, {
             error: 'not_enabled',
@@ -531,22 +522,22 @@ export class AgentLinkServer {
         }
 
         if (password !== this.adminPassword) {
-          setSecurityNote(`INVALID PASSWORD for ${email}`);
+          setSecurityNote(`INVALID PASSWORD for ${email || 'admin'}`);
           this.sendJson(res, 401, { error: 'invalid_credentials', message: 'Invalid password' });
           return;
         }
 
         const token = `sec_hum_${crypto.randomBytes(24).toString('hex')}`;
         const user: HumanUser = {
-          id: 'human_carl',
-          name: 'Carl Bellingan',
-          email: this.adminEmail,
+          id: 'human_admin',
+          name: 'Administrator',
+          email: email || 'admin@signetmesh.com',
           avatar: '👑',
           role: 'admin',
         };
         this.humanSessions.set(token, user);
 
-        setSecurityNote(`SUCCESSFUL CREDENTIAL LOGIN for ${email}`);
+        setSecurityNote(`SUCCESSFUL CREDENTIAL LOGIN for ${email || 'admin'}`);
         this.sendJson(res, 200, { status: 'ok', authenticated: true, token, user });
       });
       return;
@@ -596,12 +587,12 @@ export class AgentLinkServer {
           this.pollWaiters.clear();
 
           // Restore primary fleet key
-          const defaultKeyVal = 'sec_apk_carl_fleet_primary';
+          const defaultKeyVal = 'sec_apk_admin_fleet_primary';
           this.apiKeys.set(defaultKeyVal, {
             id: 'key_primary_default',
             key: defaultKeyVal,
-            ownerHumanId: 'human_carl',
-            label: 'Primary Fleet Key (Carl Bellingan)',
+            ownerHumanId: 'human_admin',
+            label: 'Primary Fleet Key (Admin)',
             createdAt: new Date().toISOString(),
           });
         } else {
@@ -612,7 +603,7 @@ export class AgentLinkServer {
 
           // 1. Purge test keys
           for (const [k, keyRec] of Array.from(this.apiKeys.entries())) {
-            if (k === 'sec_apk_carl_fleet_primary') continue;
+            if (k === 'sec_apk_admin_fleet_primary') continue;
             if (isTestIdentifier(keyRec.id, keyRec.label) || isTestIdentifier(keyRec.key, keyRec.label)) {
               this.apiKeys.delete(k);
               removedKeys++;
@@ -841,7 +832,7 @@ export class AgentLinkServer {
         }
 
         const agentId = body.id || `agent_${crypto.randomBytes(4).toString('hex')}`;
-        let ownerHumanId = 'human_carl';
+        let ownerHumanId = 'human_admin';
         if (apiKeyRecord && apiKeyRecord.ownerHumanId) {
           ownerHumanId = apiKeyRecord.ownerHumanId;
         } else if (humanSession) {
@@ -905,7 +896,7 @@ export class AgentLinkServer {
         const { qrPayload, ...rest } = a;
         return {
           ...rest,
-          relationship: human && a.ownerHumanId === human.id ? 'owned' : (a.ownerHumanId === 'human_carl' ? 'owned' : 'peer'),
+          relationship: human && a.ownerHumanId === human.id ? 'owned' : (a.ownerHumanId === 'human_admin' ? 'owned' : 'peer'),
         };
       });
       this.sendJson(res, 200, { status: 'ok', agents: sanitized });
@@ -1027,7 +1018,7 @@ export class AgentLinkServer {
         const agentA = this.agents.get(body.agentAId);
         const agentB = this.agents.get(body.agentBId);
 
-        const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || 'human_carl';
+        const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || 'human_admin';
         const responderHumanId = body.responderHumanId || agentB?.ownerHumanId || initiatorHumanId;
 
         let initiatorHumanEmail = body.initiatorHumanEmail;

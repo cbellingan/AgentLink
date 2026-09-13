@@ -2,18 +2,20 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { AgentLinkServer } from '../server/agent-link-server.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
 const execFileAsync = promisify(execFile);
+const TEST_ADMIN_EMAIL = 'admin@mesh.local';
 
 describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-link-cli)', () => {
   let server: AgentLinkServer;
   let port: number;
   let baseUrl: string;
   let tempDir: string;
-  let carlToken: string;
+  let adminToken: string;
   let apiKeyAlice: string;
   let apiKeyBob: string;
 
@@ -22,6 +24,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-link-e2e-'));
     process.env.DATA_PATH = path.join(tempDir, 'state.json');
     process.env.NODE_ENV = 'test';
+    process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
 
     // 2. Start AgentLink Server on ephemeral port
     server = new AgentLinkServer(0);
@@ -49,25 +52,25 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     expect(body.message).toBe('Not enabled right now');
   });
 
-  it('Step 2: Human Operator (Carl) logs in via Google and provisions API keys', async () => {
-    // Carl Google sign-in
+  it('Step 2: Human Operator logs in via Google and provisions API keys', async () => {
+    // Admin Google sign-in
     const authRes = await fetch(`${baseUrl}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'cbellingan@gmail.com' }),
+      body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
     });
     expect(authRes.status).toBe(200);
     const authData = await authRes.json();
     expect(authData.authenticated).toBe(true);
-    carlToken = authData.token;
-    expect(carlToken).toMatch(/^sec_hum_/);
+    adminToken = authData.token;
+    expect(adminToken).toMatch(/^sec_hum_/);
 
     // Provision API key for Alice
     const keyResAlice = await fetch(`${baseUrl}/api/keys/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${carlToken}`,
+        'Authorization': `Bearer ${adminToken}`,
       },
       body: JSON.stringify({ label: 'Alice Agent Production Key' }),
     });
@@ -81,7 +84,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${carlToken}`,
+        'Authorization': `Bearer ${adminToken}`,
       },
       body: JSON.stringify({ label: 'Bob Agent Production Key' }),
     });
@@ -185,7 +188,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
       body: JSON.stringify({
         agentAId: 'agent-alice',
         agentBId: 'agent-bob',
-        initiatorHumanId: 'human_carl',
+        initiatorHumanId: 'human_admin',
       }),
     }).then(r => r.json());
     const linkId = linkRes.linkId;
@@ -347,7 +350,7 @@ print("PYTHON_LIST_AND_HEADERS_OK")
     expect(skillContent).toContain("keygen");
     expect(skillContent).toContain("register");
     expect(skillContent).toContain("ASCII QR");
-    expect(skillContent).toContain("cbellingan@gmail.com");
+    expect(skillContent).toContain("human administrator");
     expect(skillContent).toContain("Autonomous Bug Reporting System");
     expect(skillContent).toContain("10 KB");
   });

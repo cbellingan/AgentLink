@@ -22,7 +22,7 @@
     "audit:security": "node scripts/security-auditor.mjs"
   },
   "keywords": ["agent", "zero-knowledge", "security", "ed25519", "x25519", "qr", "mcp"],
-  "author": "Carl Bellingan <cbellingan@gmail.com>",
+  "author": "AgentLink Maintainers",
   "license": "MIT",
   "devDependencies": {
     "@playwright/test": "^1.50.1",
