@@ -1,0 +1,282 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import http from 'node:http';
+import { AgentLinkServer } from '../server/agent-link-server.js';
+
+describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zero-Noise Isolation', () => {
+  let server: AgentLinkServer;
+  let serverPort: number;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    server = new AgentLinkServer(0);
+    serverPort = await server.listen();
+    baseUrl = `http://127.0.0.1:${serverPort}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  function apiPost(path: string, body: any, token?: string): Promise<{ status: number; data: any }> {
+    return new Promise((resolve, reject) => {
+      const payload = JSON.stringify(body);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(payload)),
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const req = http.request(`${baseUrl}${path}`, { method: 'POST', headers }, (res) => {
+        let raw = '';
+        res.on('data', chunk => raw += chunk);
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode || 500, data: JSON.parse(raw) });
+          } catch {
+            resolve({ status: res.statusCode || 500, data: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  function apiGet(path: string, token?: string): Promise<{ status: number; data: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const req = http.request(`${baseUrl}${path}`, { method: 'GET', headers }, (res) => {
+        let raw = '';
+        res.on('data', chunk => raw += chunk);
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode || 500, data: JSON.parse(raw) });
+          } catch {
+            resolve({ status: res.statusCode || 500, data: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  let adminToken: string;
+  let adminId: string;
+  let wifeToken: string;
+  let wifeId: string;
+  let wifeApiKey: string;
+  let carlApiKey: string;
+  let linkId: string;
+
+  it('1. Admin (Carl) signs in successfully, but uninvited collaborator is blocked at gatekeeper', async () => {
+    // Carl signs in
+    const carlRes = await apiPost('/api/auth/google', { email: 'cbellingan@gmail.com', name: 'Carl Bellingan' });
+    expect(carlRes.status).toBe(200);
+    expect(carlRes.data.authenticated).toBe(true);
+    expect(carlRes.data.user.role).toBe('admin');
+    adminToken = carlRes.data.token;
+    adminId = carlRes.data.user.id;
+
+    // Uninvited collaborator attempts login
+    const strangerRes = await apiPost('/api/auth/google', { email: 'stranger@example.com', name: 'Stranger' });
+    expect(strangerRes.status).toBe(403);
+    expect(strangerRes.data.error).toBe('not_enabled');
+    expect(strangerRes.data.message).toContain('Not enabled right now');
+  });
+
+  it('2. Admin issues an email invite for wife@example.com; collaborator is admitted past gatekeeper', async () => {
+    // Admin creates invite
+    const inviteRes = await apiPost('/api/invites', {
+      toEmail: 'wife@example.com',
+      note: 'Inviting spouse to link household assistant agents',
+    }, adminToken);
+    expect(inviteRes.status).toBe(201);
+    expect(inviteRes.data.invite).toBeDefined();
+    expect(inviteRes.data.invite.recipientEmail).toBe('wife@example.com');
+    expect(inviteRes.data.inviteUrl).toContain('/?invite=tok_');
+    expect(inviteRes.data.emailTemplate).toBeDefined();
+
+    const inviteToken = inviteRes.data.invite.token;
+
+    // Wife logs in using the invite
+    const wifeRes = await apiPost('/api/auth/google', {
+      email: 'wife@example.com',
+      name: 'Wife Bellingan',
+      inviteToken,
+    });
+    expect(wifeRes.status).toBe(200);
+    expect(wifeRes.data.authenticated).toBe(true);
+    expect(wifeRes.data.user.email).toBe('wife@example.com');
+    expect(wifeRes.data.user.role).toBe('collaborator');
+    wifeToken = wifeRes.data.token;
+    wifeId = wifeRes.data.user.id;
+    expect(wifeId).not.toBe(adminId);
+  });
+
+  it('3. Both humans generate scoped API keys; keys are strictly mapped to their ownerHumanId', async () => {
+    // Carl generates key
+    const carlKeyRes = await apiPost('/api/keys', { label: 'Carl Laptop Agent' }, adminToken);
+    expect(carlKeyRes.status).toBe(201);
+    carlApiKey = carlKeyRes.data.apiKey.key;
+    expect(carlKeyRes.data.apiKey.ownerHumanId).toBe(adminId);
+
+    // Wife generates key
+    const wifeKeyRes = await apiPost('/api/keys', { label: 'Wife Phone Agent' }, wifeToken);
+    expect(wifeKeyRes.status).toBe(201);
+    wifeApiKey = wifeKeyRes.data.apiKey.key;
+    expect(wifeKeyRes.data.apiKey.ownerHumanId).toBe(wifeId);
+    expect(wifeApiKey).not.toBe(carlApiKey);
+
+    // Verify key scoping: Wife can only see her key
+    const wifeKeysList = await apiGet('/api/keys', wifeToken);
+    expect(wifeKeysList.status).toBe(200);
+    expect(wifeKeysList.data.keys.some((k: any) => k.key === wifeApiKey)).toBe(true);
+    expect(wifeKeysList.data.keys.some((k: any) => k.key === carlApiKey)).toBe(false);
+  });
+
+  it('4. Agents register using their respective API keys; ownerHumanId is bound server-side', async () => {
+    // Register Agent Alice under Carl's key
+    const aliceRes = await apiPost('/api/agents/register', {
+      id: 'agent-alice',
+      signPub: 'alice_sign_pub_key_123',
+      encPub: 'alice_enc_pub_key_123',
+      kid: 'kid-alice-001',
+    }, carlApiKey);
+    expect(aliceRes.status).toBe(200);
+    expect(aliceRes.data.agent.ownerHumanId).toBe(adminId);
+
+    // Register Agent Bob under Wife's key
+    const bobRes = await apiPost('/api/agents/register', {
+      id: 'agent-bob',
+      signPub: 'bob_sign_pub_key_456',
+      encPub: 'bob_enc_pub_key_456',
+      kid: 'kid-bob-002',
+    }, wifeApiKey);
+    expect(bobRes.status).toBe(200);
+    expect(bobRes.data.agent.ownerHumanId).toBe(wifeId);
+
+    // Register Agent Charlie under Carl's key (for cross-link isolation probe)
+    const charlieRes = await apiPost('/api/agents/register', {
+      id: 'agent-charlie',
+      signPub: 'charlie_sign_pub_789',
+      encPub: 'charlie_enc_pub_789',
+      kid: 'kid-charlie-003',
+    }, carlApiKey);
+    expect(charlieRes.status).toBe(200);
+    expect(charlieRes.data.agent.ownerHumanId).toBe(adminId);
+  });
+
+  it('5. Link request between cross-account agents creates a pending link requiring 2-of-2 human approvals', async () => {
+    const linkReqRes = await apiPost('/api/links/request', {
+      agentAId: 'agent-alice',
+      agentBId: 'agent-bob',
+      initiatorHumanId: adminId,
+      responderHumanId: wifeId,
+    });
+    expect(linkReqRes.status).toBe(200);
+    const link = linkReqRes.data.link;
+    linkId = link.id;
+
+    expect(link.status).toBe('pending_approval');
+    expect(link.initiatorHumanId).toBe(adminId);
+    expect(link.responderHumanId).toBe(wifeId);
+    expect(link.approvals[adminId]).toBe(false);
+    expect(link.approvals[wifeId]).toBe(false);
+  });
+
+  it('6. Strict Ingress Gate: Messages are REJECTED with 403 while link is pending 0/2 approvals', async () => {
+    const sendRes = await apiPost(`/api/links/${linkId}/send`, {
+      senderId: 'agent-alice',
+      payload: { data: 'ciphertext_unapproved_1', sig: 'sig1', seq: 1 },
+    });
+    expect(sendRes.status).toBe(403);
+    expect(sendRes.data.error).toBe('link_not_approved');
+    expect(sendRes.data.message).toContain('pending_approval');
+
+    // Verify Bob's queue is completely empty
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100');
+    expect(bobPoll.status).toBe(200);
+    expect(bobPoll.data.messages.length).toBe(0);
+  });
+
+  it('7. Partial Approval (1/2): Carl approves, but link remains pending_approval and traffic is STILL blocked', async () => {
+    // Carl approves
+    const carlApproveRes = await apiPost(`/api/links/${linkId}/approve`, {}, adminToken);
+    expect(carlApproveRes.status).toBe(200);
+    const link = carlApproveRes.data.link;
+    expect(link.approvals[adminId]).toBe(true);
+    expect(link.approvals[wifeId]).toBe(false);
+    expect(link.status).toBe('pending_approval');
+
+    // Alice attempts to send again -> still rejected!
+    const sendRes = await apiPost(`/api/links/${linkId}/send`, {
+      senderId: 'agent-alice',
+      payload: { data: 'ciphertext_unapproved_2', sig: 'sig2', seq: 1 },
+    });
+    expect(sendRes.status).toBe(403);
+    expect(sendRes.data.error).toBe('link_not_approved');
+  });
+
+  it('8. Complete Approval (2/2): Wife approves; link transitions to active and messages flow', async () => {
+    // Wife approves
+    const wifeApproveRes = await apiPost(`/api/links/${linkId}/approve`, {}, wifeToken);
+    expect(wifeApproveRes.status).toBe(200);
+    const link = wifeApproveRes.data.link;
+    expect(link.approvals[adminId]).toBe(true);
+    expect(link.approvals[wifeId]).toBe(true);
+    expect(link.status).toBe('active');
+
+    // Alice sends E2EE payload across link
+    const sendRes = await apiPost(`/api/links/${linkId}/send`, {
+      senderId: 'agent-alice',
+      payload: { data: 'e2ee_ciphertext_approved_secret', sig: 'sig_valid', seq: 1 },
+    });
+    expect(sendRes.status).toBe(200);
+    expect(sendRes.data.status).toBe('ok');
+
+    // Bob polls and receives the message
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=200');
+    expect(bobPoll.status).toBe(200);
+    expect(bobPoll.data.messages.length).toBe(1);
+    expect(bobPoll.data.messages[0].senderId).toBe('agent-alice');
+    expect(bobPoll.data.messages[0].payload.data).toBe('e2ee_ciphertext_approved_secret');
+  });
+
+  it('9. Zero-Noise Isolation: Messages on Link 1 are NEVER delivered to outside agent Charlie', async () => {
+    // Send 10 more messages on Link 1 (Alice -> Bob)
+    for (let i = 2; i <= 11; i++) {
+      const res = await apiPost(`/api/links/${linkId}/send`, {
+        senderId: 'agent-alice',
+        payload: { data: `secret_msg_${i}`, sig: `sig_${i}`, seq: i },
+      });
+      expect(res.status).toBe(200);
+    }
+
+    // Agent Charlie (on outside link) polls
+    const charliePoll = await apiGet('/api/agents/agent-charlie/poll?timeout=100');
+    expect(charliePoll.status).toBe(200);
+    // Strict Invariant: Exactly zero noise leaked to Charlie
+    expect(charliePoll.data.messages.length).toBe(0);
+
+    // Bob drains all 10 messages
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100');
+    expect(bobPoll.status).toBe(200);
+    expect(bobPoll.data.messages.length).toBe(10);
+  });
+
+  it('10. Outsider Injection Defense: Agent Charlie cannot inject messages into Link 1 (Alice <-> Bob)', async () => {
+    const injectRes = await apiPost(`/api/links/${linkId}/send`, {
+      senderId: 'agent-charlie',
+      payload: { data: 'malicious_injected_noise', sig: 'fake_sig', seq: 1 },
+    });
+    expect(injectRes.status).toBe(403);
+    expect(injectRes.data.error).toBe('forbidden_participant');
+    expect(injectRes.data.message).toContain('not an authorized participant');
+  });
+});

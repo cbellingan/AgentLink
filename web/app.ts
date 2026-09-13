@@ -568,17 +568,24 @@ async function refreshPeerLinks() {
     } else {
       linksListContainer.innerHTML = links.map(l => {
         const isActive = l.status === 'active';
+        const approvals = l.approvals || {};
+        const totalOwners = Object.keys(approvals).length || 1;
+        const approvedCount = Object.values(approvals).filter(Boolean).length;
+        const isCurrentApproved = currentUser ? Boolean(approvals[currentUser.id]) : false;
+        const peerEmail = l.responderHumanEmail || (l.initiatorHumanId !== currentUser?.id ? l.initiatorHumanEmail : null);
+
         return `
           <div class="link-item" style="cursor: pointer; background: var(--bg-secondary); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);" onclick="window.openLinkConversationModal('${l.id}')">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
               <div>
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                   <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 14px;">${escapeHtml(l.agentAId)}</strong>
                   <span style="color: var(--text-secondary); font-size: 13px;">⟷</span>
                   <strong style="color: #38bdf8; font-family: var(--font-mono); font-size: 14px;">${escapeHtml(l.agentBId)}</strong>
                   <span class="badge ${isActive ? 'badge-success' : 'badge-warning'}" style="font-size: 10px;">
-                    ${isActive ? '● Active' : '● Pending Approval'}
+                    ${isActive ? '● Active' : `● Pending (${approvedCount}/${totalOwners} approved)`}
                   </span>
+                  ${peerEmail ? `<span style="font-size: 11px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono);">👤 ${escapeHtml(peerEmail)}</span>` : ''}
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">
                   ID: <span style="font-family: var(--font-mono);">${escapeHtml(l.id)}</span>
@@ -587,11 +594,13 @@ async function refreshPeerLinks() {
                 </div>
               </div>
               <div style="display: flex; gap: 6px; flex-shrink: 0;" onclick="event.stopPropagation()">
-                ${!isActive ? `
+                ${!isActive && (!isCurrentApproved || currentUser?.role === 'admin') ? `
                   <button type="button" class="btn btn-sm" style="background: #059669;" onclick="window.approveLink('${l.id}')">
                     ✓ Approve Link
                   </button>
-                ` : ''}
+                ` : (!isActive && isCurrentApproved ? `
+                  <span style="font-size: 11px; color: #34d399; font-weight: 500; align-self: center;">✓ You Approved (Waiting for Peer)</span>
+                ` : '')}
                 <button type="button" class="btn btn-sm" style="background: #2563eb;" onclick="window.openLinkConversationModal('${l.id}')" title="View conversation flow & frames">
                   👁️ Conversation
                 </button>
@@ -1054,6 +1063,73 @@ btnResetAllCleanSlate?.addEventListener('click', () => {
   }
 });
 
+// Invite Collaborator Modal Logic
+const btnOpenInviteModal = document.getElementById('btnOpenInviteModal');
+const inviteModal = document.getElementById('inviteModal');
+const btnCloseInviteModal = document.getElementById('btnCloseInviteModal');
+const inviteForm = document.getElementById('inviteForm') as HTMLFormElement | null;
+const inviteRecipientEmail = document.getElementById('inviteRecipientEmail') as HTMLInputElement | null;
+const inviteNote = document.getElementById('inviteNote') as HTMLInputElement | null;
+const inviteResultBox = document.getElementById('inviteResultBox');
+const inviteUrlDisplay = document.getElementById('inviteUrlDisplay') as HTMLInputElement | null;
+const btnCopyInviteLink = document.getElementById('btnCopyInviteLink');
+const btnCopyInviteEmail = document.getElementById('btnCopyInviteEmail');
+
+let lastInviteEmailTemplate: any = null;
+
+btnOpenInviteModal?.addEventListener('click', () => {
+  inviteModal?.classList.remove('hidden');
+  inviteResultBox?.classList.add('hidden');
+  if (inviteRecipientEmail) inviteRecipientEmail.value = '';
+  if (inviteNote) inviteNote.value = '';
+});
+
+btnCloseInviteModal?.addEventListener('click', () => {
+  inviteModal?.classList.add('hidden');
+});
+
+inviteForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const toEmail = inviteRecipientEmail?.value.trim() || '';
+  const note = inviteNote?.value.trim() || undefined;
+  if (!toEmail) return;
+
+  try {
+    const res = await apiRequest('/api/invites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toEmail, note }),
+    });
+    if (res.status === 'ok') {
+      lastInviteEmailTemplate = res.emailTemplate;
+      if (inviteUrlDisplay) {
+        inviteUrlDisplay.value = res.inviteUrl;
+      }
+      inviteResultBox?.classList.remove('hidden');
+      clientLog('info', 'invites', `Successfully created invite for ${toEmail}`);
+    }
+  } catch (err: any) {
+    alert(`Failed to create invite: ${err.message}`);
+  }
+});
+
+btnCopyInviteLink?.addEventListener('click', () => {
+  if (inviteUrlDisplay && inviteUrlDisplay.value) {
+    navigator.clipboard.writeText(inviteUrlDisplay.value);
+    btnCopyInviteLink.textContent = '✅ Copied!';
+    setTimeout(() => { if (btnCopyInviteLink) btnCopyInviteLink.textContent = '📋 Copy Link'; }, 2000);
+  }
+});
+
+btnCopyInviteEmail?.addEventListener('click', () => {
+  if (lastInviteEmailTemplate) {
+    const fullText = `Subject: ${lastInviteEmailTemplate.subject}\n\n${lastInviteEmailTemplate.body}`;
+    navigator.clipboard.writeText(fullText);
+    btnCopyInviteEmail.textContent = '✅ Email Copied!';
+    setTimeout(() => { if (btnCopyInviteEmail) btnCopyInviteEmail.textContent = '📋 Copy Full Email Knowledge Template'; }, 2000);
+  }
+});
+
 async function refreshDashboard() {
   await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks()]);
 }
@@ -1062,15 +1138,21 @@ async function refreshDashboard() {
 window.addEventListener('DOMContentLoaded', async () => {
   clientLog('info', 'lifecycle', 'Application DOM loaded and initialized');
 
+  const urlParams = new URLSearchParams(window.location.search);
+  const inviteToken = urlParams.get('invite');
+  if (inviteToken && !sessionToken) {
+    openGoogleModal();
+  }
+
   if (sessionToken) {
     clientLog('info', 'lifecycle', 'Found existing session token, verifying with server');
     try {
       const res = await apiRequest('/api/auth/me');
-      if (res.status === 'ok' && res.user && res.user.role === 'admin') {
+      if (res.status === 'ok' && res.user) {
         clientLog('info', 'lifecycle', 'Session valid; unlocking dashboard');
         unlockDashboard(res.user, sessionToken);
       } else {
-        clientLog('warn', 'lifecycle', 'Session invalid or not admin; locking landing');
+        clientLog('warn', 'lifecycle', 'Session invalid; locking landing');
         lockLanding();
       }
     } catch {

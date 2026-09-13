@@ -45,6 +45,8 @@ export interface LinkRecord {
   agentBId: string;
   initiatorHumanId: string;
   responderHumanId?: string;
+  initiatorHumanEmail?: string;
+  responderHumanEmail?: string;
   status: 'pending_approval' | 'active' | 'revoked';
   createdAt: string;
   linkKey?: string;
@@ -53,6 +55,19 @@ export interface LinkRecord {
   bytesBtoA?: number;
   framesCount?: number;
   recentMessages?: Array<LinkMessageEntry>;
+}
+
+export interface InviteRecord {
+  id: string;
+  inviterHumanId: string;
+  inviterEmail: string;
+  recipientEmail: string;
+  fromAgentId?: string;
+  token: string;
+  status: 'pending' | 'accepted' | 'expired' | 'revoked';
+  createdAt: string;
+  expiresAt: string;
+  note?: string;
 }
 
 export interface AccessLogEntry {

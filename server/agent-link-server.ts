@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
-import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, AccessLogEntry, ClientLogEntry } from './types.js';
+import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, InviteRecord, AccessLogEntry, ClientLogEntry } from './types.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -25,6 +25,7 @@ export class AgentLinkServer {
   private apiKeys: Map<string, ApiKeyRecord> = new Map(); // apiKey -> record
   private agents: Map<string, AgentRecord> = new Map(); // agentId -> record
   private links: Map<string, LinkRecord> = new Map(); // linkId -> record
+  private invites: Map<string, InviteRecord> = new Map(); // inviteId/token -> record
   private messageQueues: Map<string, Array<any>> = new Map(); // agentId -> pending messages
   private pollWaiters: Map<string, Array<(msgs: any[]) => boolean>> = new Map(); // agentId -> resolvers
   private accessLogs: AccessLogEntry[] = [];
@@ -73,6 +74,13 @@ export class AgentLinkServer {
             this.links.set(k, v as LinkRecord);
           }
         }
+        if (parsed.invites) {
+          for (const [k, v] of Object.entries(parsed.invites)) {
+            const inv = v as InviteRecord;
+            this.invites.set(k, inv);
+            if (inv.token) this.invites.set(inv.token, inv);
+          }
+        }
       }
     } catch (e) {
       console.warn('[AgentLink Server] Could not load state from disk:', e);
@@ -89,6 +97,7 @@ export class AgentLinkServer {
         apiKeys: Object.fromEntries(this.apiKeys.entries()),
         agents: Object.fromEntries(this.agents.entries()),
         links: Object.fromEntries(this.links.entries()),
+        invites: Object.fromEntries(Array.from(this.invites.entries()).filter(([k]) => k.startsWith('inv_'))),
       };
       fs.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), 'utf8');
     } catch (e) {
@@ -392,8 +401,16 @@ export class AgentLinkServer {
           }
         }
 
-        // Enforce Carl Bellingan restriction
-        if (email !== this.adminEmail) {
+        const inviteToken = (body.inviteToken || body.invite || '').trim();
+        let matchingInvite = inviteToken ? this.invites.get(inviteToken) : null;
+        if (!matchingInvite && email) {
+          matchingInvite = Array.from(this.invites.values()).find(
+            inv => inv.recipientEmail === email && (inv.status === 'pending' || inv.status === 'accepted')
+          ) || null;
+        }
+
+        // Enforce Carl Bellingan or Invited Collaborator restriction
+        if (email !== this.adminEmail && !matchingInvite) {
           setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
           this.sendJson(res, 403, {
             error: 'not_enabled',
@@ -402,18 +419,24 @@ export class AgentLinkServer {
           return;
         }
 
-        // Generate authenticated session for Carl
+        const isAdmin = email === this.adminEmail;
+        const userHumanId = isAdmin ? 'human_carl' : `human_${crypto.createHash('sha256').update(email).digest('hex').slice(0, 12)}`;
         const token = `sec_hum_${crypto.randomBytes(24).toString('hex')}`;
         const user: HumanUser = {
-          id: 'human_carl',
-          name: name || 'Carl Bellingan',
-          email: this.adminEmail,
-          avatar: '👑',
-          role: 'admin',
+          id: userHumanId,
+          name: name || (isAdmin ? 'Carl Bellingan' : email.split('@')[0]),
+          email: email,
+          avatar: isAdmin ? '👑' : '🤝',
+          role: isAdmin ? 'admin' : 'collaborator',
         };
         this.humanSessions.set(token, user);
 
-        setSecurityNote(`SUCCESSFUL GOOGLE LOGIN for ${email}`);
+        if (matchingInvite) {
+          matchingInvite.status = 'accepted';
+          this.saveState();
+        }
+
+        setSecurityNote(`SUCCESSFUL GOOGLE LOGIN for ${email} (${user.role})`);
         this.sendJson(res, 200, { status: 'ok', authenticated: true, token, user });
       });
       return;
@@ -568,10 +591,10 @@ export class AgentLinkServer {
     }
 
     // 5. API Key Generation & Management
-    if (req.method === 'POST' && parsedUrl === '/api/keys/generate') {
+    if (req.method === 'POST' && (parsedUrl === '/api/keys/generate' || parsedUrl === '/api/keys')) {
       const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== 'admin') {
-        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
         return;
       }
 
@@ -596,19 +619,21 @@ export class AgentLinkServer {
 
     if (req.method === 'GET' && parsedUrl === '/api/keys') {
       const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== 'admin') {
-        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
         return;
       }
 
-      const keysList = Array.from(this.apiKeys.values()).map(k => ({
-        id: k.id,
-        keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
-        key: k.key,
-        label: k.label,
-        createdAt: k.createdAt,
-        lastUsedAt: k.lastUsedAt,
-      }));
+      const keysList = Array.from(this.apiKeys.values())
+        .filter(k => human.role === 'admin' || k.ownerHumanId === human.id)
+        .map(k => ({
+          id: k.id,
+          keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
+          key: k.key,
+          label: k.label,
+          createdAt: k.createdAt,
+          lastUsedAt: k.lastUsedAt,
+        }));
 
       this.sendJson(res, 200, { status: 'ok', keys: keysList });
       return;
@@ -616,8 +641,8 @@ export class AgentLinkServer {
 
     if (req.method === 'DELETE' && parsedUrl.startsWith('/api/keys/')) {
       const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== 'admin') {
-        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
         return;
       }
 
@@ -625,6 +650,10 @@ export class AgentLinkServer {
       let deleted = false;
       for (const [k, record] of this.apiKeys.entries()) {
         if (record.id === keyId || record.key === keyId) {
+          if (human.role !== 'admin' && record.ownerHumanId !== human.id) {
+            this.sendJson(res, 403, { error: 'forbidden', message: 'Not authorized to delete this key' });
+            return;
+          }
           this.apiKeys.delete(k);
           deleted = true;
           break;
@@ -636,12 +665,94 @@ export class AgentLinkServer {
       return;
     }
 
+    // 5b. Email Invites Endpoints
+    if (req.method === 'POST' && parsedUrl === '/api/invites') {
+      const human = this.getAuthenticatedHuman(req);
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required to create an invite' });
+        return;
+      }
+
+      readJson((body) => {
+        const toEmail = (body.toEmail || body.email || '').trim().toLowerCase();
+        if (!toEmail || !toEmail.includes('@')) {
+          this.sendJson(res, 400, { error: 'invalid_email', message: 'Valid recipient email address is required' });
+          return;
+        }
+
+        const inviteId = `inv_${crypto.randomBytes(8).toString('hex')}`;
+        const token = `tok_${crypto.randomBytes(24).toString('base64url')}`;
+        const fromAgentId = body.fromAgentId || undefined;
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+        const inviteRecord: InviteRecord = {
+          id: inviteId,
+          inviterHumanId: human.id,
+          inviterEmail: human.email,
+          recipientEmail: toEmail,
+          fromAgentId,
+          token,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          expiresAt,
+          note: body.note,
+        };
+
+        this.invites.set(inviteId, inviteRecord);
+        this.invites.set(token, inviteRecord);
+        this.saveState();
+
+        const host = req.headers['host'] || `localhost:${this.port}`;
+        const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
+        const inviteUrl = `${proto}://${host}/?invite=${token}`;
+
+        const emailTemplate = {
+          subject: `AgentLink Invitation to Connect Autonomous Agents from ${human.name || human.email}`,
+          to: toEmail,
+          inviteUrl,
+          token,
+          body: `Hi,\n\n` +
+            `${human.name || human.email} has invited you to connect autonomous AI agents on the AgentLink Zero-Knowledge Mesh.\n\n` +
+            `To accept this invitation:\n` +
+            `1. Open this secure link: ${inviteUrl}\n` +
+            `2. Sign in with Google using this email address (${toEmail})\n` +
+            `3. Generate an API key in your dashboard and provision your agent\n\n` +
+            `Note: Traffic is held in pending state until both you and ${human.name || human.email} approve the link in your respective dashboards.\n`,
+        };
+
+        setSecurityNote(`INVITE ISSUED: ${inviteId} to ${toEmail} by ${human.email}`);
+        this.sendJson(res, 201, {
+          status: 'ok',
+          invite: inviteRecord,
+          inviteUrl,
+          emailTemplate,
+        });
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && parsedUrl === '/api/invites') {
+      const human = this.getAuthenticatedHuman(req);
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
+        return;
+      }
+
+      const list = Array.from(new Set(this.invites.values())).filter(
+        inv => human.role === 'admin' || inv.inviterHumanId === human.id || inv.recipientEmail === human.email
+      );
+
+      this.sendJson(res, 200, { status: 'ok', invites: list });
+      return;
+    }
+
     // 6. Agent Registration Endpoint (Using API Key)
     if (req.method === 'POST' && parsedUrl === '/api/agents/register') {
       readJson((body) => {
         const token = this.extractToken(req);
         const apiKeyRecord = token ? this.apiKeys.get(token) : null;
-        const isAdmin = Boolean(token && this.humanSessions.get(token)?.role === 'admin');
+        const humanSession = token ? this.humanSessions.get(token) : null;
+        const isAdmin = Boolean(humanSession && humanSession.role === 'admin');
 
         if (!apiKeyRecord && !isAdmin && token !== 'sec_apk_valid_12345') {
           setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key`);
@@ -657,9 +768,18 @@ export class AgentLinkServer {
         }
 
         const agentId = body.id || `agent_${crypto.randomBytes(4).toString('hex')}`;
+        let ownerHumanId = 'human_carl';
+        if (apiKeyRecord && apiKeyRecord.ownerHumanId) {
+          ownerHumanId = apiKeyRecord.ownerHumanId;
+        } else if (humanSession) {
+          ownerHumanId = humanSession.id;
+        } else if (body.ownerHumanId) {
+          ownerHumanId = body.ownerHumanId;
+        }
+
         const agentRecord: AgentRecord = {
           id: agentId,
-          ownerHumanId: 'human_carl',
+          ownerHumanId,
           registeredAt: new Date().toISOString(),
           signPub: body.signPub,
           encPub: body.encPub,
@@ -676,7 +796,7 @@ export class AgentLinkServer {
         }
         this.saveState();
 
-        setSecurityNote(`AGENT REGISTERED: ${agentId} bound to Carl's fleet`);
+        setSecurityNote(`AGENT REGISTERED: ${agentId} bound to ${ownerHumanId}`);
         this.notifySupervisors({ type: 'agent_registered', agent: agentRecord });
 
         this.sendJson(res, 200, {
@@ -684,6 +804,7 @@ export class AgentLinkServer {
           agentId: agentRecord.id,
           pollUrl: `/api/agents/${agentRecord.id}/poll`,
           registeredAt: agentRecord.registeredAt,
+          agent: agentRecord,
         });
       });
       return;
@@ -691,6 +812,7 @@ export class AgentLinkServer {
 
     // 7. Agent Fleet Listing & De-registration
     if (req.method === 'GET' && parsedUrl === '/api/agents') {
+      const human = this.getAuthenticatedHuman(req);
       let filterAgentId: string | null = null;
       if (req.url && req.url.includes('?')) {
         const query = new URLSearchParams(req.url.split('?')[1]);
@@ -701,13 +823,16 @@ export class AgentLinkServer {
       if (filterAgentId) {
         list = list.filter(a => a.id === filterAgentId);
       }
+      if (human && human.role !== 'admin') {
+        list = list.filter(a => a.ownerHumanId === human.id);
+      }
 
       // Compact agent records: strip heavy qrPayload from list response to prevent chunk truncation
       const sanitized = list.map(a => {
         const { qrPayload, ...rest } = a;
         return {
           ...rest,
-          relationship: 'owned',
+          relationship: human && a.ownerHumanId === human.id ? 'owned' : (a.ownerHumanId === 'human_carl' ? 'owned' : 'peer'),
         };
       });
       this.sendJson(res, 200, { status: 'ok', agents: sanitized });
@@ -826,16 +951,38 @@ export class AgentLinkServer {
     if (req.method === 'POST' && parsedUrl === '/api/links/request') {
       readJson((body) => {
         const linkId = `link_${crypto.randomBytes(6).toString('hex')}`;
+        const agentA = this.agents.get(body.agentAId);
+        const agentB = this.agents.get(body.agentBId);
+
+        const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || 'human_carl';
+        const responderHumanId = body.responderHumanId || agentB?.ownerHumanId || initiatorHumanId;
+
+        let initiatorHumanEmail = body.initiatorHumanEmail;
+        let responderHumanEmail = body.responderHumanEmail;
+        for (const session of this.humanSessions.values()) {
+          if (session.id === initiatorHumanId && !initiatorHumanEmail) initiatorHumanEmail = session.email;
+          if (session.id === responderHumanId && !responderHumanEmail) responderHumanEmail = session.email;
+        }
+
+        const isSameOwner = initiatorHumanId === responderHumanId;
+        const approvals: Record<string, boolean> = {};
+        approvals[initiatorHumanId] = false;
+        if (!isSameOwner) {
+          approvals[responderHumanId] = false;
+        }
+
         const record: LinkRecord = {
           id: linkId,
           agentAId: body.agentAId,
           agentBId: body.agentBId,
-          initiatorHumanId: body.initiatorHumanId || 'human_carl',
-          responderHumanId: body.responderHumanId,
+          initiatorHumanId,
+          responderHumanId,
+          initiatorHumanEmail,
+          responderHumanEmail,
           status: 'pending_approval',
           createdAt: new Date().toISOString(),
           linkKey: `sec_link_${crypto.randomBytes(16).toString('hex')}`,
-          approvals: {},
+          approvals,
           framesCount: 0,
           bytesAtoB: 0,
           bytesBtoA: 0,
@@ -849,6 +996,7 @@ export class AgentLinkServer {
 
     // 9. Links Query Endpoints (Global, Filtered, and Single Link)
     if (req.method === 'GET' && (parsedUrl === '/api/links' || (parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/links')))) {
+      const human = this.getAuthenticatedHuman(req);
       let filterAgentId: string | null = null;
       if (parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/links')) {
         filterAgentId = parsedUrl.split('/')[3] || null;
@@ -861,6 +1009,9 @@ export class AgentLinkServer {
       let list = Array.from(this.links.values());
       if (filterAgentId) {
         list = list.filter(l => l.agentAId === filterAgentId || l.agentBId === filterAgentId);
+      }
+      if (human && human.role !== 'admin') {
+        list = list.filter(l => l.initiatorHumanId === human.id || l.responderHumanId === human.id);
       }
 
       // Compact recentMessages for list endpoint to prevent huge payloads dropping mid-response
@@ -903,7 +1054,24 @@ export class AgentLinkServer {
         return;
       }
       readJson((body) => {
-        link.status = 'active';
+        const human = this.getAuthenticatedHuman(req);
+        const approverId = human?.id || body.approverHumanId || body.humanId || link.initiatorHumanId;
+
+        if (!link.approvals) {
+          link.approvals = {};
+        }
+        link.approvals[approverId] = true;
+
+        const isSameOwner = !link.responderHumanId || link.initiatorHumanId === link.responderHumanId;
+        const initiatorOk = Boolean(link.approvals[link.initiatorHumanId]);
+        const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId!]);
+
+        if ((human?.role === 'admin' && body.force) || (initiatorOk && responderOk)) {
+          link.status = 'active';
+        } else {
+          link.status = 'pending_approval';
+        }
+
         if (body.peerVerification) {
           const targetAgent = this.agents.get(link.agentBId);
           if (targetAgent) targetAgent.peerVerification = body.peerVerification;
@@ -927,9 +1095,33 @@ export class AgentLinkServer {
       const parts = parsedUrl.split('/');
       const linkId = parts[3];
       const link = this.links.get(linkId);
+      if (!link) {
+        this.sendJson(res, 404, { error: 'link_not_found', message: `Link '${linkId}' not found` });
+        return;
+      }
+
       readJson((body) => {
+        // Strict Ingress 1: Mutual Dual-Human Approval Check
+        if (link.status !== 'active') {
+          this.sendJson(res, 403, {
+            error: 'link_not_approved',
+            message: `Link '${linkId}' has not been approved by all human controllers (status: ${link.status}).`,
+            approvals: link.approvals,
+          });
+          return;
+        }
+
         const senderId = body.senderId;
-        const targetId = senderId === link?.agentAId ? link?.agentBId : (senderId === link?.agentBId ? link?.agentAId : undefined);
+        // Strict Ingress 2: Participant Check (Zero Noise / No Cross-Link Injection)
+        if (senderId !== link.agentAId && senderId !== link.agentBId) {
+          this.sendJson(res, 403, {
+            error: 'forbidden_participant',
+            message: `Agent '${senderId}' is not an authorized participant of link '${link.id}'.`,
+          });
+          return;
+        }
+
+        const targetId = senderId === link.agentAId ? link.agentBId : link.agentAId;
 
         if (targetId) {
           if (link) {

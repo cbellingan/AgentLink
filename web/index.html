@@ -102,12 +102,17 @@
       <div class="card" data-testid="api-key-card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
           <div>
-            <h3 style="font-size: 16px;">🔑 Agent API Keys</h3>
-            <p style="font-size: 12px; color: var(--text-secondary);">Generate keys for your CLI agents to connect to this server</p>
+            <h3 style="font-size: 16px;">🔑 Agent API Keys & Invites</h3>
+            <p style="font-size: 12px; color: var(--text-secondary);">Generate keys for your CLI agents or invite external collaborators</p>
           </div>
-          <button type="button" id="btnGenerateKey" class="btn btn-sm" data-testid="btn-generate-key">
-            ➕ Generate Agent API Key
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="btnOpenInviteModal" class="btn btn-secondary btn-sm" data-testid="btn-open-invite-modal">
+              ✉️ Invite Collaborator
+            </button>
+            <button type="button" id="btnGenerateKey" class="btn btn-sm" data-testid="btn-generate-key">
+              ➕ Generate Agent API Key
+            </button>
+          </div>
         </div>
 
         <!-- Newly Generated Key Alert -->
@@ -410,6 +415,47 @@
           </div>
 
           <div id="cleanSlateStatusMessage" class="hidden" style="font-size: 12px; padding: 8px 12px; border-radius: 6px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Invite Collaborator Modal -->
+    <div id="inviteModal" class="modal-overlay hidden" data-testid="invite-modal">
+      <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">✉️</span>
+            <h3 style="font-size: 15px; margin: 0;">Invite Collaborator</h3>
+          </div>
+          <button type="button" id="btnCloseInviteModal" class="modal-close-btn">&times;</button>
+        </div>
+        <form id="inviteForm" style="display: flex; flex-direction: column; gap: 14px;">
+          <p style="font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5;">
+            Invite a collaborator by email. They will receive access past the security gatekeeper to register their agent and form mutual, dual-approved links with your fleet.
+          </p>
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px;">Collaborator Email Address</label>
+            <input type="email" id="inviteRecipientEmail" required placeholder="colleague@example.com" class="input-field" style="width: 100%; box-sizing: border-box;" data-testid="invite-email-input" />
+          </div>
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px;">Context Note (Optional)</label>
+            <input type="text" id="inviteNote" placeholder="e.g. Household assistant / project collaboration" class="input-field" style="width: 100%; box-sizing: border-box;" />
+          </div>
+          <button type="submit" id="btnSubmitInvite" class="btn" style="width: 100%;">
+            ✉️ Generate Secure Invitation
+          </button>
+        </form>
+
+        <div id="inviteResultBox" class="hidden" style="margin-top: 16px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
+          <div style="font-weight: 600; color: var(--accent); font-size: 13px; margin-bottom: 6px;">🎉 Invitation Generated!</div>
+          <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 10px 0;">Share this secure link or copy the formatted email template below:</p>
+          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+            <input type="text" id="inviteUrlDisplay" readonly style="flex: 1; padding: 6px 10px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; color: #38bdf8;" />
+            <button type="button" id="btnCopyInviteLink" class="btn btn-secondary btn-sm">📋 Copy Link</button>
+          </div>
+          <button type="button" id="btnCopyInviteEmail" class="btn btn-secondary btn-sm" style="width: 100%;">
+            📋 Copy Full Email Knowledge Template
+          </button>
         </div>
       </div>
     </div>
