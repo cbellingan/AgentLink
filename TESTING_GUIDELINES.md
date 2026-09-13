@@ -108,3 +108,12 @@ The CI/CD deployment script (`scripts/deploy-local.mjs`) enforces this workflow 
 7. **Step 7**: Cloudflare Named Tunnel Status Verification.
 8. **Step 8**: Tier 2 Public Edge Verification (`https://agent.signetmesh.com`) through Cloudflare edge.
 9. **Automatic Rollback**: Any failure in Steps 1–8 automatically triggers zero-downtime rollback to the previous binary.
+
+---
+
+## Rule 2: Branch on High-Risk or Critical Changes
+
+Whenever planning or implementing high-risk, breaking, or critical architectural modifications (e.g. cryptography primitives, envelope schema changes, authentication gatekeepers, network socket behavior, or database migrations):
+1. **Branch First**: Do not work directly on `main`. Create a dedicated feature/security branch (`git checkout -b sec/...` or `feat/...`).
+2. **Develop & Verify in Isolation**: Implement the red-first tests and fixes on the branch, running all unit, integration, and cross-project test suites.
+3. **Merge When Ready**: Merge back into `main` only after full verification passes, preserving an unbroken, deployable `main` branch at all times.
