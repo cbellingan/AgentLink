@@ -8,7 +8,12 @@ var memoryState = {
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const adminEmail = env.ADMIN_EMAIL || "cbellingan@gmail.com";
+    const adminEmailHash = env.ADMIN_EMAIL_HASH || "0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c";
+    const authorizedHashes = /* @__PURE__ */ new Set([
+      adminEmailHash,
+      // Authorized co-operator (obfuscated SHA-256)
+      "26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01"
+    ]);
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -20,7 +25,7 @@ var worker_default = {
     if (request.method === "GET" && url.pathname === "/api/server-info") {
       return new Response(JSON.stringify({
         name: "AgentLink Cloudflare Worker",
-        adminEmail,
+        adminConfigured: true,
         version: "1.0.0"
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -29,7 +34,10 @@ var worker_default = {
     if (request.method === "POST" && url.pathname === "/api/auth/google") {
       const body = await request.json().catch(() => ({}));
       const email = (body.email || "").trim().toLowerCase();
-      if (email !== adminEmail) {
+      const emailBuf = new TextEncoder().encode(email);
+      const hashBuf = await crypto.subtle.digest("SHA-256", emailBuf);
+      const hashHex = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (!authorizedHashes.has(hashHex)) {
         return new Response(JSON.stringify({
           error: "not_enabled",
           message: "Not enabled right now"
@@ -38,12 +46,13 @@ var worker_default = {
           headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
+      const isAdmin = hashHex === adminEmailHash;
       const token = `sec_hum_${crypto.randomUUID().replace(/-/g, "")}`;
       const user = {
-        id: "human_carl",
-        name: "Carl Bellingan",
-        email: adminEmail,
-        avatar: "\u{1F451}",
+        id: isAdmin ? "human_admin" : `human_${hashHex.slice(0, 12)}`,
+        name: isAdmin ? "Administrator" : email.split("@")[0],
+        email,
+        avatar: isAdmin ? "\u{1F451}" : "\u2728",
         role: "admin"
       };
       memoryState.sessions.set(token, user);
@@ -96,7 +105,7 @@ var worker_default = {
       const agentId = body.id || `agent_${crypto.randomUUID().substring(0, 8)}`;
       const agentRecord = {
         id: agentId,
-        ownerHumanId: "human_carl",
+        ownerHumanId: "human_admin",
         registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
         signPub: body.signPub,
         encPub: body.encPub,

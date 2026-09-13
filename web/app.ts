@@ -1139,6 +1139,7 @@ inviteForm?.addEventListener('submit', async (e) => {
       }
       inviteResultBox?.classList.remove('hidden');
       clientLog('info', 'invites', `Successfully created invite for ${toEmail}`);
+      await Promise.all([refreshInvites(), refreshPeerLinks()]);
     }
   } catch (err: any) {
     alert(`Failed to create invite: ${err.message}`);
@@ -1161,6 +1162,118 @@ btnCopyInviteEmail?.addEventListener('click', () => {
     setTimeout(() => { if (btnCopyInviteEmail) btnCopyInviteEmail.textContent = '📋 Copy Full Email Knowledge Template'; }, 2000);
   }
 });
+
+// 5b. Pending Invitations & Connection Requests
+const invitesListContainer = document.getElementById('invitesListContainer');
+const inviteCountBadge = document.getElementById('inviteCountBadge');
+const btnRefreshInvites = document.getElementById('btnRefreshInvites');
+
+let cachedInvites: any[] = [];
+
+async function refreshInvites() {
+  try {
+    const res = await apiRequest('/api/invites');
+    cachedInvites = res.invites || [];
+    renderInvites();
+  } catch (err) {
+    console.error('Failed to refresh invites:', err);
+  }
+}
+
+function renderInvites() {
+  if (!invitesListContainer) return;
+  const pending = cachedInvites.filter(i => i.status === 'pending');
+  if (inviteCountBadge) {
+    inviteCountBadge.textContent = `${pending.length} Pending`;
+    inviteCountBadge.className = `badge ${pending.length > 0 ? 'badge-warning' : 'badge-secondary'}`;
+  }
+
+  if (cachedInvites.length === 0) {
+    invitesListContainer.innerHTML = `<em>No pending invitations or connection requests. Click "✉️ Invite Collaborator" to invite peers.</em>`;
+    return;
+  }
+
+  invitesListContainer.innerHTML = cachedInvites.map(inv => {
+    const isPending = inv.status === 'pending';
+    const sender = inv.fromAgentId ? `🤖 ${escapeHtml(inv.fromAgentId)}` : `👤 ${escapeHtml(inv.inviterEmail)}`;
+    const recipient = escapeHtml(inv.recipientEmail);
+    const target = inv.targetAgentId ? ` ⟷ 🤖 ${escapeHtml(inv.targetAgentId)}` : '';
+    const note = inv.note ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px; font-style: italic;">“${escapeHtml(inv.note)}”</div>` : '';
+    const originHost = window.location.origin;
+    const directInviteUrl = `${originHost}/?invite=${encodeURIComponent(inv.token)}`;
+
+    return `
+      <div class="invite-item" style="background: var(--bg-secondary); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span class="badge ${isPending ? 'badge-warning' : 'badge-success'}" style="font-size: 10px;">
+                ${isPending ? '⏳ Pending Approval' : '✅ Accepted'}
+              </span>
+              <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 13px;">${sender}${target}</strong>
+              <span style="color: var(--text-secondary); font-size: 12px;">→</span>
+              <span style="font-size: 12px; color: #38bdf8; font-family: var(--font-mono);">📧 ${recipient}</span>
+            </div>
+            ${note}
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">
+              Created: ${new Date(inv.createdAt).toLocaleString()} &bull; ID: <code style="font-size: 10px;">${escapeHtml(inv.id)}</code>
+            </div>
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+            ${inv.linkId ? `
+              <button type="button" class="btn btn-sm" style="background: #059669; font-size: 11px; padding: 4px 8px;" onclick="window.approveLink('${escapeHtml(inv.linkId)}')">
+                ✓ Approve Link
+              </button>
+            ` : (inv.fromAgentId && inv.targetAgentId ? `
+              <button type="button" class="btn btn-sm" style="background: #059669; font-size: 11px; padding: 4px 8px;" onclick="window.createAndApproveLink('${escapeHtml(inv.fromAgentId)}', '${escapeHtml(inv.targetAgentId)}')">
+                ✓ Form & Approve Link
+              </button>
+            ` : '')}
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="window.copyInviteUrl('${escapeHtml(directInviteUrl)}')">
+              📋 Copy Link
+            </button>
+            <button type="button" class="btn btn-danger btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="window.dismissInvite('${escapeHtml(inv.id)}')">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+(window as any).copyInviteUrl = (url: string) => {
+  navigator.clipboard.writeText(url);
+  alert('Invite URL copied to clipboard!');
+};
+
+(window as any).dismissInvite = async (inviteId: string) => {
+  if (!confirm('Are you sure you want to dismiss this invitation?')) return;
+  try {
+    await apiRequest(`/api/invites/${encodeURIComponent(inviteId)}`, { method: 'DELETE' });
+    await refreshInvites();
+  } catch (err: any) {
+    alert(`Failed to dismiss invite: ${err.message}`);
+  }
+};
+
+(window as any).createAndApproveLink = async (agentAId: string, agentBId: string) => {
+  try {
+    const res = await apiRequest('/api/links/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentAId, agentBId }),
+    });
+    if (res.linkId) {
+      await apiRequest(`/api/links/${encodeURIComponent(res.linkId)}/approve`, { method: 'POST' });
+    }
+    await Promise.all([refreshPeerLinks(), refreshInvites()]);
+  } catch (err: any) {
+    alert(`Failed to form link: ${err.message}`);
+  }
+};
+
+btnRefreshInvites?.addEventListener('click', () => refreshInvites());
 
 // 5c. Bug Reports Management
 let bugFilter: 'open' | 'all' | 'resolved' = 'open';
@@ -1300,7 +1413,7 @@ btnBugFilterResolved?.addEventListener('click', () => {
 });
 
 async function refreshDashboard() {
-  await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks(), refreshBugReports()]);
+  await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshInvites(), refreshPeerLinks(), refreshBugReports()]);
 }
 
 // 6. Initialization

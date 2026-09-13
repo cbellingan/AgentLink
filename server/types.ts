@@ -55,6 +55,7 @@ export interface LinkRecord {
   bytesBtoA?: number;
   framesCount?: number;
   recentMessages?: Array<LinkMessageEntry>;
+  note?: string;
 }
 
 export interface InviteRecord {
@@ -63,6 +64,8 @@ export interface InviteRecord {
   inviterEmail: string;
   recipientEmail: string;
   fromAgentId?: string;
+  targetAgentId?: string;
+  linkId?: string;
   token: string;
   status: 'pending' | 'accepted' | 'expired' | 'revoked';
   createdAt: string;

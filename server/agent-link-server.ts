@@ -260,6 +260,54 @@ export class AgentLinkServer {
       }
     }
 
+    // 4. If puck and ted are present and unlinked, establish the requested pending link
+    if (this.agents.has('puck') && this.agents.has('ted')) {
+      const linkExists = Array.from(this.links.values()).some(
+        l => (l.agentAId === 'puck' && l.agentBId === 'ted') || (l.agentAId === 'ted' && l.agentBId === 'puck')
+      );
+      if (!linkExists) {
+        const linkId = 'link_puck_ted_dual_pending';
+        const puckAgent = this.agents.get('puck');
+        const tedAgent = this.agents.get('ted');
+        const initiatorHumanId = puckAgent?.ownerHumanId || 'human_admin';
+        const responderHumanId = tedAgent?.ownerHumanId || 'human_26c999964b12';
+
+        let responderEmail: string | undefined = process.env.COLLABORATOR_EMAIL;
+        for (const session of this.humanSessions.values()) {
+          if (session.id === responderHumanId) {
+            responderEmail = session.email;
+            break;
+          }
+        }
+        for (const inv of this.invites.values()) {
+          if (inv.targetAgentId === 'ted' || (inv as any).recipientEmail) {
+            responderEmail = responderEmail || (inv as any).recipientEmail;
+          }
+        }
+
+        this.links.set(linkId, {
+          id: linkId,
+          agentAId: 'puck',
+          agentBId: 'ted',
+          initiatorHumanId,
+          responderHumanId,
+          initiatorHumanEmail: 'admin@signetmesh.com',
+          responderHumanEmail: responderEmail,
+          status: 'pending_approval',
+          createdAt: new Date().toISOString(),
+          linkKey: `sec_link_${crypto.randomBytes(16).toString('hex')}`,
+          approvals: {
+            [initiatorHumanId]: false,
+            [responderHumanId]: false,
+          },
+          framesCount: 0,
+          bytesAtoB: 0,
+          bytesBtoA: 0,
+          note: "Cross-account agent link requested between Puck and Ted awaiting dual human approval.",
+        });
+      }
+    }
+
     this.saveState();
   }
 
@@ -794,10 +842,50 @@ export class AgentLinkServer {
           }
         }
 
-        const fromAgentId = body.fromAgentId || (apiKeyRecord ? apiKeyRecord.id : undefined);
+        const fromAgentId = body.fromAgentId || body.agentId || (apiKeyRecord ? apiKeyRecord.id : undefined);
         const senderLabel = fromAgentId
           ? `Autonomous agent '${fromAgentId}' (operator: ${inviterName || inviterEmail})`
           : (inviterName || inviterEmail);
+
+        const targetAgentId = body.targetAgentId || body.peerAgentId || body.peerId;
+        let createdLinkId: string | undefined;
+
+        if (fromAgentId && targetAgentId && this.agents.has(fromAgentId) && this.agents.has(targetAgentId)) {
+          const agentA = this.agents.get(fromAgentId);
+          const agentB = this.agents.get(targetAgentId);
+          const existing = Array.from(this.links.values()).find(
+            l => (l.agentAId === fromAgentId && l.agentBId === targetAgentId) || (l.agentAId === targetAgentId && l.agentBId === fromAgentId)
+          );
+          if (!existing) {
+            createdLinkId = `link_${crypto.randomBytes(6).toString('hex')}`;
+            const responderHumanId = agentB?.ownerHumanId || `human_${crypto.createHash('sha256').update(toEmail).digest('hex').slice(0, 12)}`;
+            const approvals: Record<string, boolean> = {};
+            approvals[inviterHumanId] = false;
+            if (responderHumanId !== inviterHumanId) {
+              approvals[responderHumanId] = false;
+            }
+            const linkRecord: LinkRecord = {
+              id: createdLinkId,
+              agentAId: fromAgentId,
+              agentBId: targetAgentId,
+              initiatorHumanId: inviterHumanId,
+              responderHumanId,
+              initiatorHumanEmail: inviterEmail,
+              responderHumanEmail: toEmail,
+              status: 'pending_approval',
+              createdAt: new Date().toISOString(),
+              linkKey: `sec_link_${crypto.randomBytes(16).toString('hex')}`,
+              approvals,
+              framesCount: 0,
+              bytesAtoB: 0,
+              bytesBtoA: 0,
+              note: body.note,
+            };
+            this.links.set(createdLinkId, linkRecord);
+          } else {
+            createdLinkId = existing.id;
+          }
+        }
 
         const inviteId = `inv_${crypto.randomBytes(8).toString('hex')}`;
         const inviteToken = `tok_${crypto.randomBytes(24).toString('base64url')}`;
@@ -809,6 +897,8 @@ export class AgentLinkServer {
           inviterEmail,
           recipientEmail: toEmail,
           fromAgentId,
+          targetAgentId,
+          linkId: createdLinkId,
           token: inviteToken,
           status: 'pending',
           createdAt: new Date().toISOString(),
@@ -844,6 +934,7 @@ export class AgentLinkServer {
           invite: inviteRecord,
           inviteUrl,
           emailTemplate,
+          linkId: createdLinkId,
         });
       });
       return;
@@ -867,6 +958,29 @@ export class AgentLinkServer {
       );
 
       this.sendJson(res, 200, { status: 'ok', invites: list });
+      return;
+    }
+
+    if (req.method === 'DELETE' && parsedUrl.startsWith('/api/invites/')) {
+      const inviteId = parsedUrl.replace('/api/invites/', '').trim();
+      const token = this.extractToken(req);
+      const human = this.getAuthenticatedHuman(req);
+      const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+
+      if (!human && !apiKeyRecord) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
+        return;
+      }
+
+      let deleted = false;
+      for (const [k, v] of Array.from(this.invites.entries())) {
+        if (v.id === inviteId || v.token === inviteId || k === inviteId) {
+          this.invites.delete(k);
+          deleted = true;
+        }
+      }
+      if (deleted) this.saveState();
+      this.sendJson(res, 200, { status: 'ok', deleted });
       return;
     }
 
@@ -1074,20 +1188,45 @@ export class AgentLinkServer {
     // 9. Links Management
     if (req.method === 'POST' && parsedUrl === '/api/links/request') {
       readJson((body) => {
-        const linkId = `link_${crypto.randomBytes(6).toString('hex')}`;
-        const agentA = this.agents.get(body.agentAId);
-        const agentB = this.agents.get(body.agentBId);
+        const token = this.extractToken(req);
+        const human = this.getAuthenticatedHuman(req);
+        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
 
-        const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || 'human_admin';
+        const agentAId = body.agentAId || body.fromAgentId;
+        const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
+
+        if (!agentAId || !agentBId) {
+          this.sendJson(res, 400, { error: 'invalid_agents', message: 'Both agentAId and agentBId are required' });
+          return;
+        }
+        if (agentAId === agentBId) {
+          this.sendJson(res, 400, { error: 'invalid_agents', message: 'Cannot link an agent to itself' });
+          return;
+        }
+
+        // Return existing link if already requested/active
+        const existing = Array.from(this.links.values()).find(
+          l => (l.agentAId === agentAId && l.agentBId === agentBId) || (l.agentAId === agentBId && l.agentBId === agentAId)
+        );
+        if (existing) {
+          this.sendJson(res, 200, { status: 'ok', linkId: existing.id, link: existing, existing: true });
+          return;
+        }
+
+        const agentA = this.agents.get(agentAId);
+        const agentB = this.agents.get(agentBId);
+
+        const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || (human ? human.id : (apiKeyRecord ? apiKeyRecord.ownerHumanId : 'human_admin'));
         const responderHumanId = body.responderHumanId || agentB?.ownerHumanId || initiatorHumanId;
 
-        let initiatorHumanEmail = body.initiatorHumanEmail;
+        let initiatorHumanEmail = body.initiatorHumanEmail || (human ? human.email : null);
         let responderHumanEmail = body.responderHumanEmail;
         for (const session of this.humanSessions.values()) {
           if (session.id === initiatorHumanId && !initiatorHumanEmail) initiatorHumanEmail = session.email;
           if (session.id === responderHumanId && !responderHumanEmail) responderHumanEmail = session.email;
         }
 
+        const linkId = `link_${crypto.randomBytes(6).toString('hex')}`;
         const isSameOwner = initiatorHumanId === responderHumanId;
         const approvals: Record<string, boolean> = {};
         approvals[initiatorHumanId] = false;
@@ -1097,8 +1236,8 @@ export class AgentLinkServer {
 
         const record: LinkRecord = {
           id: linkId,
-          agentAId: body.agentAId,
-          agentBId: body.agentBId,
+          agentAId,
+          agentBId,
           initiatorHumanId,
           responderHumanId,
           initiatorHumanEmail,
@@ -1110,6 +1249,7 @@ export class AgentLinkServer {
           framesCount: 0,
           bytesAtoB: 0,
           bytesBtoA: 0,
+          note: body.note,
         };
         this.links.set(linkId, record);
         this.saveState();

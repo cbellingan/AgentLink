@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { AgentLinkServer } from '../server/agent-link-server.js';
 
 const TEST_ADMIN_EMAIL = 'admin@test.local';
@@ -9,8 +12,12 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
   let server: AgentLinkServer;
   let serverPort: number;
   let baseUrl: string;
+  let tempDir: string;
 
   beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlink-dual-test-'));
+    process.env.DATA_PATH = path.join(tempDir, 'state.json');
+    process.env.NODE_ENV = 'test';
     process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
     server = new AgentLinkServer(0);
     serverPort = await server.listen();
@@ -19,6 +26,9 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
 
   afterAll(async () => {
     await server.close();
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   function apiPost(path: string, body: any, token?: string): Promise<{ status: number; data: any }> {
@@ -55,6 +65,28 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
         headers['Authorization'] = `Bearer ${token}`;
       }
       const req = http.request(`${baseUrl}${path}`, { method: 'GET', headers }, (res) => {
+        let raw = '';
+        res.on('data', chunk => raw += chunk);
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode || 500, data: JSON.parse(raw) });
+          } catch {
+            resolve({ status: res.statusCode || 500, data: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  function apiDelete(path: string, token?: string): Promise<{ status: number; data: any }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const req = http.request(`${baseUrl}${path}`, { method: 'DELETE', headers }, (res) => {
         let raw = '';
         res.on('data', chunk => raw += chunk);
         res.on('end', () => {
@@ -314,5 +346,59 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(injectRes.status).toBe(403);
     expect(injectRes.data.error).toBe('forbidden_participant');
     expect(injectRes.data.message).toContain('not an authorized participant');
+  });
+
+  it('11. Agent Link Request Pipeline: Requests via /api/links/request create pending_approval links', async () => {
+    // Agent Alice requests link with Agent Charlie using agent API key
+    const reqRes = await apiPost('/api/links/request', {
+      agentAId: 'agent-alice',
+      agentBId: 'agent-charlie',
+      note: 'Connecting Alice and Charlie',
+    }, adminApiKey);
+    expect(reqRes.status).toBe(200);
+    expect(reqRes.data.status).toBe('ok');
+    expect(reqRes.data.link.status).toBe('pending_approval');
+    expect(reqRes.data.link.agentAId).toBe('agent-alice');
+    expect(reqRes.data.link.agentBId).toBe('agent-charlie');
+    expect(reqRes.data.link.approvals[adminId]).toBe(false);
+
+    // Verify it appears in GET /api/links for authenticated user
+    const linksRes = await apiGet('/api/links', adminToken);
+    expect(linksRes.status).toBe(200);
+    const foundLink = linksRes.data.links.find((l: any) => l.id === reqRes.data.link.id);
+    expect(foundLink).toBeDefined();
+    expect(foundLink.status).toBe('pending_approval');
+  });
+
+  it('12. Targeted Invites & Management: Invite with targetAgentId creates pending link, surfaces in /api/invites, and can be dismissed', async () => {
+    // Create invite targeting agent-bob
+    const inviteRes = await apiPost('/api/invites', {
+      toEmail: 'newpartner@test.local',
+      agentId: 'agent-alice',
+      targetAgentId: 'agent-bob',
+      note: 'Join mesh to link with Alice',
+    }, adminToken);
+    expect(inviteRes.status).toBe(201);
+    expect(inviteRes.data.status).toBe('ok');
+    const inviteId = inviteRes.data.invite.id;
+
+    // Verify GET /api/invites lists this invite
+    const invitesRes = await apiGet('/api/invites', adminToken);
+    expect(invitesRes.status).toBe(200);
+    const foundInvite = invitesRes.data.invites.find((inv: any) => inv.id === inviteId);
+    expect(foundInvite).toBeDefined();
+    expect(foundInvite.fromAgentId).toBe('agent-alice');
+    expect(foundInvite.targetAgentId).toBe('agent-bob');
+
+    // Dismiss / delete the invite
+    const delRes = await apiDelete(`/api/invites/${inviteId}`, adminToken);
+    expect(delRes.status).toBe(200);
+    expect(delRes.data.status).toBe('ok');
+
+    // Confirm it's removed from /api/invites
+    const afterInvitesRes = await apiGet('/api/invites', adminToken);
+    expect(afterInvitesRes.status).toBe(200);
+    const stillPresent = afterInvitesRes.data.invites.find((inv: any) => inv.id === inviteId);
+    expect(stillPresent).toBeUndefined();
   });
 });

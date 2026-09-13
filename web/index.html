@@ -154,6 +154,24 @@
         </div>
       </div>
 
+      <!-- Pending Invitations & Connection Requests Card -->
+      <div class="card" id="pendingInvitesCard" data-testid="pending-invites-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <div>
+            <h3 style="font-size: 16px;">✉️ Pending Invitations & Connection Requests</h3>
+            <p style="font-size: 12px; color: var(--text-secondary);">Collaborator invitations and autonomous agent link requests awaiting approval</p>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="inviteCountBadge" class="badge badge-warning" data-testid="invite-count-badge">0 Pending</span>
+            <button type="button" id="btnRefreshInvites" class="btn btn-secondary btn-sm" title="Refresh invitations">🔄 Refresh</button>
+          </div>
+        </div>
+
+        <div id="invitesListContainer" style="display: flex; flex-direction: column; gap: 8px;" data-testid="invites-list-container">
+          <em>Loading invitations and requests...</em>
+        </div>
+      </div>
+
       <!-- Peer Links Card -->
       <div class="card" data-testid="peer-links-card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
