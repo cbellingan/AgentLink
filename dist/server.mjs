@@ -298,6 +298,24 @@ var AgentLinkServer = class {
         });
         return;
       }
+      if (req.method === "GET" && (parsedUrl === "/api/docs/encryption" || parsedUrl === "/docs/encryption.md")) {
+        const docPath = path.resolve("docs/encryption.md");
+        if (fs.existsSync(docPath)) {
+          const text = fs.readFileSync(docPath, "utf8");
+          if (parsedUrl.endsWith(".md")) {
+            const buf = Buffer.from(text, "utf8");
+            res.writeHead(200, {
+              "Content-Type": "text/markdown; charset=utf-8",
+              "Content-Length": buf.length,
+              "Cache-Control": "no-cache, no-store, must-revalidate"
+            });
+            res.end(buf);
+            return;
+          }
+          this.sendJson(res, 200, { status: "ok", content: text });
+          return;
+        }
+      }
       if (req.method === "POST" && parsedUrl === "/api/auth/google") {
         readJson((body) => {
           let email = (body.email || "").trim().toLowerCase();
@@ -855,6 +873,23 @@ var AgentLinkServer = class {
     }
   }
   serveStatic(req, res, parsedUrl) {
+    if (parsedUrl.startsWith("/docs/")) {
+      const relDoc = parsedUrl.replace(/^\/docs\//, "");
+      const docPath = path.join(path.resolve("docs"), relDoc);
+      if (fs.existsSync(docPath) && !fs.statSync(docPath).isDirectory()) {
+        try {
+          const content = fs.readFileSync(docPath);
+          res.writeHead(200, {
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Content-Length": content.length,
+            "Cache-Control": "no-cache, no-store, must-revalidate"
+          });
+          res.end(content);
+          return;
+        } catch {
+        }
+      }
+    }
     let filePath = path.join(this.staticPath, parsedUrl === "/" ? "index.html" : parsedUrl);
     if (!fs.existsSync(filePath)) {
       filePath = path.join(this.staticPath, "index.html");
@@ -866,7 +901,8 @@ var AgentLinkServer = class {
       ".css": "text/css; charset=utf-8",
       ".json": "application/json",
       ".png": "image/png",
-      ".svg": "image/svg+xml"
+      ".svg": "image/svg+xml",
+      ".md": "text/markdown; charset=utf-8"
     };
     const contentType = mimeTypes[ext] || "application/octet-stream";
     try {

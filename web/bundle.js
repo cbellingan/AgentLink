@@ -2135,6 +2135,7 @@ var formGoogleSignInModal = document.getElementById("formGoogleSignInModal");
 var inputGoogleEmail = document.getElementById("inputGoogleEmail");
 var btnCancelGoogleConsent = document.getElementById("btnCancelGoogleConsent");
 var aboutModal = document.getElementById("aboutModal");
+var aboutContent = document.getElementById("aboutContent");
 var btnOpenAboutModal = document.getElementById("btnOpenAboutModal");
 var btnCloseAboutModal = document.getElementById("btnCloseAboutModal");
 var linkAboutEncryptionLanding = document.getElementById("linkAboutEncryptionLanding");
@@ -2283,9 +2284,127 @@ googleConsentModal?.addEventListener("click", (e) => {
     closeGoogleConsentModal();
   }
 });
+function renderMarkdownToHtml(text) {
+  const lines = text.split("\n");
+  const html = [];
+  let inList = false;
+  let inNumberedList = false;
+  function closeLists() {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+    if (inNumberedList) {
+      html.push("</ol>");
+      inNumberedList = false;
+    }
+  }
+  function inlineFormat(str) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>").replace(/\*(.*?)\*/g, "<em>$1</em>").replace(/`([^`]+)`/g, '<code style="background: var(--bg-primary); border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; color: var(--accent);">$1</code>');
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      closeLists();
+      continue;
+    }
+    if (line.startsWith("# ")) {
+      closeLists();
+      html.push(`<h2 style="font-size: 17px; color: var(--accent); margin: 0 0 10px 0; font-weight: 700;">${inlineFormat(line.slice(2))}</h2>`);
+    } else if (line.startsWith("### ")) {
+      closeLists();
+      html.push(`<div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 12px;"><h3 style="font-size: 14px; margin: 0 0 8px 0; color: #38bdf8;">${inlineFormat(line.slice(4))}</h3>`);
+      const cardBody = [];
+      let j = i + 1;
+      let cardInList = false;
+      let cardInNumList = false;
+      while (j < lines.length && !lines[j].trim().startsWith("### ") && !lines[j].trim().startsWith("# ") && !lines[j].trim().startsWith("---")) {
+        const cLine = lines[j].trim();
+        if (!cLine) {
+          if (cardInList) {
+            cardBody.push("</ul>");
+            cardInList = false;
+          }
+          if (cardInNumList) {
+            cardBody.push("</ol>");
+            cardInNumList = false;
+          }
+        } else if (cLine.startsWith("- ")) {
+          if (!cardInList) {
+            cardBody.push('<ul style="margin: 6px 0 6px 18px; padding: 0;">');
+            cardInList = true;
+          }
+          cardBody.push(`<li style="margin-bottom: 4px; color: var(--text-secondary);">${inlineFormat(cLine.slice(2))}</li>`);
+        } else if (/^\d+\.\s/.test(cLine)) {
+          if (!cardInNumList) {
+            cardBody.push('<ol style="margin: 6px 0 6px 18px; padding: 0;">');
+            cardInNumList = true;
+          }
+          cardBody.push(`<li style="margin-bottom: 4px; color: var(--text-secondary);">${inlineFormat(cLine.replace(/^\d+\.\s/, ""))}</li>`);
+        } else {
+          cardBody.push(`<p style="margin: 0 0 8px 0; color: var(--text-primary); line-height: 1.5;">${inlineFormat(cLine)}</p>`);
+        }
+        j++;
+      }
+      if (cardInList) cardBody.push("</ul>");
+      if (cardInNumList) cardBody.push("</ol>");
+      html.push(cardBody.join(""));
+      html.push("</div>");
+      i = j - 1;
+    } else if (line === "---") {
+      closeLists();
+    } else if (line.startsWith("- ")) {
+      if (!inList) {
+        html.push('<ul style="margin: 6px 0 6px 18px; padding: 0;">');
+        inList = true;
+      }
+      html.push(`<li style="margin-bottom: 4px; color: var(--text-secondary);">${inlineFormat(line.slice(2))}</li>`);
+    } else if (/^\d+\.\s/.test(line)) {
+      if (!inNumberedList) {
+        html.push('<ol style="margin: 6px 0 6px 18px; padding: 0;">');
+        inNumberedList = true;
+      }
+      html.push(`<li style="margin-bottom: 4px; color: var(--text-secondary);">${inlineFormat(line.replace(/^\d+\.\s/, ""))}</li>`);
+    } else {
+      closeLists();
+      html.push(`<p style="margin: 0 0 10px 0; color: var(--text-primary); line-height: 1.5;">${inlineFormat(line)}</p>`);
+    }
+  }
+  closeLists();
+  return html.join("\n");
+}
+async function loadAndDisplayDocumentation() {
+  if (!aboutContent) return;
+  try {
+    let md = "";
+    try {
+      const res = await fetch("/api/docs/encryption");
+      if (res.ok) {
+        const data = await res.json();
+        md = data.content;
+      }
+    } catch {
+    }
+    if (!md) {
+      const res = await fetch("/docs/encryption.md");
+      if (res.ok) {
+        md = await res.text();
+      }
+    }
+    if (md) {
+      aboutContent.innerHTML = renderMarkdownToHtml(md);
+      clientLog("info", "docs", "Documentation loaded directly from docs/encryption.md and rendered");
+      return;
+    }
+  } catch (err) {
+    clientLog("warn", "docs", "Failed to load docs/encryption.md", { error: err.message });
+  }
+  aboutContent.innerHTML = '<div style="color: #f87171; padding: 16px;">Failed to load documentation from <code>docs/encryption.md</code>.</div>';
+}
 function openAboutModal() {
   clientLog("info", "ui", "Opening About & Zero-Knowledge Architecture modal");
   aboutModal?.classList.remove("hidden");
+  loadAndDisplayDocumentation();
 }
 function closeAboutModal() {
   clientLog("info", "ui", "Closing About modal");

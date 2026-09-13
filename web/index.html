@@ -368,77 +368,10 @@
           <button type="button" id="btnCloseAboutModal" class="modal-close-btn">&times;</button>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 18px; line-height: 1.5; font-size: 13px;">
-          <!-- Story Banner -->
-          <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
-            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Story: The Steel Lockbox & The Postal Courier</div>
-            <p style="margin: 0; color: var(--text-primary); font-size: 12px; line-height: 1.6;">
-              Imagine two agents, <strong>Alice</strong> and <strong>Bob</strong>, wanting to send private messages using a central postal courier. Without ever whispering passwords over the internet, Alice and Bob use Diffie-Hellman math to arrive at the <em>exact same secret combination</em>. Alice puts her message inside a heavy <strong>steel lockbox (AES-256-GCM)</strong>, stamps the outside with her personal <strong>wax seal signet ring (Ed25519 signature)</strong>, and engraves a fresh <strong>serial number and timestamp</strong> against replay. She hands the locked box to the courier. The courier can hold the box, inspect the outside, and read the address label—it is completely safe because <strong>the courier has no combination to open it</strong>. When Bob receives it, he verifies Alice's wax seal, enters their secret combination, and pops the lock open.
-            </p>
-          </div>
-
-          <!-- 4 Story Pillars Grid -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #38bdf8; margin-bottom: 4px;">1. 🔑 The Secret Combination</div>
-              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Alice and Bob compute the exact same combination locally via Curve25519 math. Their private keys stay in <code>~/.agent-link/keys.json</code> (0600 permissions) and are never sent over the wire.
-              </p>
-            </div>
-
-            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #34d399; margin-bottom: 4px;">2. 🔒 The Steel Lockbox</div>
-              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Payloads are locked with AES-256-GCM using a fresh random padlock position (IV) per message. Even identical messages look completely scrambled and random on the wire.
-              </p>
-            </div>
-
-            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #fbbf24; margin-bottom: 4px;">3. ✍️ The Personal Wax Seal</div>
-              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Alice presses her unique Ed25519 signet ring into wax on the clasp. Bob knows her seal. If anyone alters a single bit in transit, the seal cracks and the message is rejected.
-              </p>
-            </div>
-
-            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 4px;">4. ⏱️ Serial Numbers & Timestamps</div>
-              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Every box is engraved with an ascending sequence number and timestamp. If an attacker copies a box and tries to re-deliver it later, Bob detects the duplicate and discards it.
-              </p>
-            </div>
-          </div>
-
-          <!-- Zero-Knowledge Relay Comparison -->
-          <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px;">
-            <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);">👁️ Wire Visibility & Zero-Access Security</div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-              <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
-                <div style="color: #f87171; font-weight: 600; margin-bottom: 4px;">👁️ What the Courier / Relay Reads:</div>
-                <div style="color: var(--text-secondary);">
-                  linkId: "link_..."<br />
-                  senderId: "agent-alice"<br />
-                  seq: 42<br />
-                  ciphertext: "9f3a...e8"<br />
-                  sig: "1d8b...2f"<br />
-                  <span style="color: #ef4444;">[Key Access: ZERO | Plaintext: UNREADABLE]</span>
-                </div>
-              </div>
-              <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
-                <div style="color: #34d399; font-weight: 600; margin-bottom: 4px;">✅ What Verified Peer Sees:</div>
-                <div style="color: var(--text-secondary);">
-                  Signature: VALID (Alice)<br />
-                  Replay Check: PASSED<br />
-                  AAD Binding: MATCH<br />
-                  Payload: "Syncing task data..."<br />
-                  <span style="color: #10b981;">[Status: VERIFIED AUTHENTIC]</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Fail-Closed Guarantee -->
-          <div style="font-size: 12px; color: var(--text-secondary);">
-            ⚡ <strong>Fail-Closed Guarantee:</strong> AgentLink clients refuse silent fallback to unencrypted communication. If peer encryption keys cannot be verified, message sending halts immediately unless explicitly overridden with <code>--plaintext</code>. Full cryptographic specifications are detailed in <code>ENCRYPTION.md</code>.
+        <!-- Dynamic Content loaded from docs/encryption.md (Single Source of Truth) -->
+        <div id="aboutContent" style="display: flex; flex-direction: column; gap: 14px; line-height: 1.5; font-size: 13px;">
+          <div style="padding: 24px; text-align: center; color: var(--text-secondary);">
+            ⏳ Loading architecture documentation from <code>docs/encryption.md</code>...
           </div>
         </div>
       </div>
