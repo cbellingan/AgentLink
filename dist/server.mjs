@@ -265,6 +265,10 @@ var AgentLinkServer = class {
   }
   sendJson(res, statusCode, data) {
     try {
+      const incomingReq = res.req;
+      if (incomingReq && !incomingReq.readableEnded) {
+        incomingReq.resume();
+      }
       const jsonStr = JSON.stringify(data);
       const buf = Buffer.from(jsonStr, "utf8");
       res.writeHead(statusCode, {
@@ -288,6 +292,11 @@ var AgentLinkServer = class {
   handleHttpRequest(req, res) {
     const startTime = Date.now();
     let securityNote;
+    req.on("error", (err) => {
+      if (err.code !== "ECONNRESET") {
+        console.warn(`[HTTP REQ WARN] ${req.method} ${req.url}:`, err.message);
+      }
+    });
     const setSecurityNote = (note) => {
       securityNote = note;
     };
@@ -296,6 +305,9 @@ var AgentLinkServer = class {
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token, X-Human-Id");
     res.on("finish", () => {
+      if (!req.readableEnded) {
+        req.resume();
+      }
       const durationMs = Date.now() - startTime;
       const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress || "127.0.0.1";
       const human = this.getAuthenticatedHuman(req);
@@ -563,12 +575,12 @@ var AgentLinkServer = class {
         return;
       }
       if (req.method === "POST" && (parsedUrl === "/api/keys/generate" || parsedUrl === "/api/keys")) {
-        const human = this.getAuthenticatedHuman(req);
-        if (!human) {
-          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
-          return;
-        }
         readJson((body) => {
+          const human = this.getAuthenticatedHuman(req);
+          if (!human) {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+            return;
+          }
           const keyVal = `sec_apk_${crypto.randomBytes(32).toString("hex")}`;
           const keyRecord = {
             id: `key_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
@@ -625,57 +637,75 @@ var AgentLinkServer = class {
         return;
       }
       if (req.method === "POST" && parsedUrl === "/api/invites") {
-        const human = this.getAuthenticatedHuman(req);
-        if (!human) {
-          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to create an invite" });
-          return;
-        }
         readJson((body) => {
+          const token = this.extractToken(req);
+          const human = this.getAuthenticatedHuman(req);
+          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          if (!human && !apiKeyRecord) {
+            this.sendJson(res, 401, {
+              error: "unauthorized",
+              message: "Authentication required to create an invite (valid human session or agent API key required)"
+            });
+            return;
+          }
           const toEmail = (body.toEmail || body.email || "").trim().toLowerCase();
           if (!toEmail || !toEmail.includes("@")) {
             this.sendJson(res, 400, { error: "invalid_email", message: "Valid recipient email address is required" });
             return;
           }
+          const inviterHumanId = human ? human.id : apiKeyRecord.ownerHumanId || "human_admin";
+          let inviterEmail = human ? human.email : "admin@signetmesh.com";
+          let inviterName = human ? human.name || human.email : void 0;
+          if (!human && apiKeyRecord) {
+            for (const s of this.humanSessions.values()) {
+              if (s.id === inviterHumanId) {
+                inviterEmail = s.email;
+                inviterName = s.name || s.email;
+                break;
+              }
+            }
+          }
+          const fromAgentId = body.fromAgentId || (apiKeyRecord ? apiKeyRecord.id : void 0);
+          const senderLabel = fromAgentId ? `Autonomous agent '${fromAgentId}' (operator: ${inviterName || inviterEmail})` : inviterName || inviterEmail;
           const inviteId = `inv_${crypto.randomBytes(8).toString("hex")}`;
-          const token = `tok_${crypto.randomBytes(24).toString("base64url")}`;
-          const fromAgentId = body.fromAgentId || void 0;
+          const inviteToken = `tok_${crypto.randomBytes(24).toString("base64url")}`;
           const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3).toISOString();
           const inviteRecord = {
             id: inviteId,
-            inviterHumanId: human.id,
-            inviterEmail: human.email,
+            inviterHumanId,
+            inviterEmail,
             recipientEmail: toEmail,
             fromAgentId,
-            token,
+            token: inviteToken,
             status: "pending",
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
             expiresAt,
             note: body.note
           };
           this.invites.set(inviteId, inviteRecord);
-          this.invites.set(token, inviteRecord);
+          this.invites.set(inviteToken, inviteRecord);
           this.saveState();
           const host = req.headers["host"] || `localhost:${this.port}`;
           const proto = req.headers["x-forwarded-proto"] || (host.includes("localhost") ? "http" : "https");
-          const inviteUrl = `${proto}://${host}/?invite=${token}`;
+          const inviteUrl = `${proto}://${host}/?invite=${inviteToken}`;
           const emailTemplate = {
-            subject: `AgentLink Invitation to Connect Autonomous Agents from ${human.name || human.email}`,
+            subject: `AgentLink Invitation to Connect Autonomous Agents from ${senderLabel}`,
             to: toEmail,
             inviteUrl,
-            token,
+            token: inviteToken,
             body: `Hi,
 
-${human.name || human.email} has invited you to connect autonomous AI agents on the AgentLink Zero-Knowledge Mesh.
+${senderLabel} has invited you to connect autonomous AI agents on the AgentLink Zero-Knowledge Mesh.
 
 To accept this invitation:
 1. Open this secure link: ${inviteUrl}
 2. Sign in with Google using this email address (${toEmail})
 3. Generate an API key in your dashboard and provision your agent
 
-Note: Traffic is held in pending state until both you and ${human.name || human.email} approve the link in your respective dashboards.
+Note: Traffic is held in pending state until both you and ${inviterName || inviterEmail} approve the link in your respective dashboards.
 `
           };
-          setSecurityNote(`INVITE ISSUED: ${inviteId} to ${toEmail} by ${human.email}`);
+          setSecurityNote(`INVITE ISSUED: ${inviteId} to ${toEmail} by ${senderLabel}`);
           this.sendJson(res, 201, {
             status: "ok",
             invite: inviteRecord,
@@ -686,13 +716,17 @@ Note: Traffic is held in pending state until both you and ${human.name || human.
         return;
       }
       if (req.method === "GET" && parsedUrl === "/api/invites") {
+        const token = this.extractToken(req);
         const human = this.getAuthenticatedHuman(req);
-        if (!human) {
+        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        if (!human && !apiKeyRecord) {
           this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
           return;
         }
+        const humanId = human ? human.id : apiKeyRecord.ownerHumanId;
+        const isAdmin = human && human.role === "admin" || humanId === "human_admin";
         const list = Array.from(new Set(this.invites.values())).filter(
-          (inv) => human.role === "admin" || inv.inviterHumanId === human.id || inv.recipientEmail === human.email
+          (inv) => isAdmin || inv.inviterHumanId === humanId || human && inv.recipientEmail === human.email
         );
         this.sendJson(res, 200, { status: "ok", invites: list });
         return;
@@ -951,14 +985,14 @@ Note: Traffic is held in pending state until both you and ${human.name || human.
         return;
       }
       if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && parsedUrl.endsWith("/approve")) {
-        const parts = parsedUrl.split("/");
-        const linkId = parts[3];
-        const link = this.links.get(linkId);
-        if (!link) {
-          this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
-          return;
-        }
         readJson((body) => {
+          const parts = parsedUrl.split("/");
+          const linkId = parts[3];
+          const link = this.links.get(linkId);
+          if (!link) {
+            this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+            return;
+          }
           const human = this.getAuthenticatedHuman(req);
           const approverId = human?.id || body.approverHumanId || body.humanId || link.initiatorHumanId;
           if (!link.approvals) {
@@ -990,14 +1024,14 @@ Note: Traffic is held in pending state until both you and ${human.name || human.
         return;
       }
       if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message"))) {
-        const parts = parsedUrl.split("/");
-        const linkId = parts[3];
-        const link = this.links.get(linkId);
-        if (!link) {
-          this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
-          return;
-        }
         readJson((body) => {
+          const parts = parsedUrl.split("/");
+          const linkId = parts[3];
+          const link = this.links.get(linkId);
+          if (!link) {
+            this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+            return;
+          }
           if (link.status !== "active") {
             this.sendJson(res, 403, {
               error: "link_not_approved",

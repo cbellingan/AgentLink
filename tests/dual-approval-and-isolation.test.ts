@@ -144,6 +144,38 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(wifeKeysList.data.keys.some((k: any) => k.key === adminApiKey)).toBe(false);
   });
 
+  it('3b. Agent with valid API key generates email invite on behalf of human owner', async () => {
+    // Agent 'puck' uses adminApiKey to create an invite
+    const agentInviteRes = await apiPost('/api/invites', {
+      toEmail: 'collaborator@example.com',
+      fromAgentId: 'puck',
+      note: 'Autonomous agent Puck requesting peer collaboration',
+    }, adminApiKey);
+
+    expect(agentInviteRes.status).toBe(201);
+    expect(agentInviteRes.data.invite).toBeDefined();
+    expect(agentInviteRes.data.invite.fromAgentId).toBe('puck');
+    expect(agentInviteRes.data.invite.recipientEmail).toBe('collaborator@example.com');
+    expect(agentInviteRes.data.invite.inviterHumanId).toBe(adminId);
+    expect(agentInviteRes.data.inviteUrl).toContain('/?invite=tok_');
+    expect(agentInviteRes.data.emailTemplate.subject).toContain("Autonomous agent 'puck'");
+
+    // Agent queries invite list
+    const agentListRes = await apiGet('/api/invites', adminApiKey);
+    expect(agentListRes.status).toBe(200);
+    expect(agentListRes.data.invites.some((inv: any) => inv.recipientEmail === 'collaborator@example.com')).toBe(true);
+  });
+
+  it('3c. Unauthenticated request to POST /api/invites is rejected with 401 without socket reset', async () => {
+    const unauthRes = await apiPost('/api/invites', {
+      toEmail: 'unauth@example.com',
+      fromAgentId: 'puck',
+      note: 'Testing missing auth',
+    });
+    expect(unauthRes.status).toBe(401);
+    expect(unauthRes.data.error).toBe('unauthorized');
+  });
+
   it('4. Agents register using their respective API keys; ownerHumanId is bound server-side', async () => {
     // Register Agent Alice under Admin's key
     const aliceRes = await apiPost('/api/agents/register', {
