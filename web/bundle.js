@@ -2648,6 +2648,7 @@ async function refreshPeerLinks() {
                   <span class="badge ${isActive ? "badge-success" : "badge-warning"}" style="font-size: 10px;">
                     ${isActive ? "\u25CF Active" : `\u25CF Pending (${approvedCount}/${totalOwners} approved)`}
                   </span>
+                  ${l.safetyNumber ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-family: var(--font-mono); font-size: 11px;">\u{1F6E1}\uFE0F Safety: ${escapeHtml(l.safetyNumber)}</span>` : ""}
                   ${peerEmail ? `<span style="font-size: 11px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono);">\u{1F464} ${escapeHtml(peerEmail)}</span>` : ""}
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">
@@ -2664,6 +2665,9 @@ async function refreshPeerLinks() {
                 ` : !isActive && isCurrentApproved ? `
                   <span style="font-size: 11px; color: #34d399; font-weight: 500; align-self: center;">\u2713 You Approved (Waiting for Peer)</span>
                 ` : ""}
+                <button type="button" class="btn btn-secondary btn-sm" onclick="window.showAgentPromptForLink('${l.id}')" title="Copy human-to-agent prompt instructions">
+                  \u{1F4CB} Agent Prompt
+                </button>
                 <button type="button" class="btn btn-sm" style="background: #2563eb;" onclick="window.openLinkConversationModal('${l.id}')" title="View conversation flow & frames">
                   \u{1F441}\uFE0F Conversation
                 </button>
@@ -2761,14 +2765,64 @@ formCreateLink?.addEventListener("submit", async (e) => {
     alert(`Failed to establish link: ${err.message}`);
   }
 });
+window.showAgentPromptForLink = (linkId) => {
+  const link = activeLinks.get(linkId);
+  if (!link) return;
+  const modal = document.getElementById("agentPromptModal");
+  const safetyDisplay = document.getElementById("modalSafetyNumberDisplay");
+  const promptText = document.getElementById("modalAgentPromptText");
+  if (!modal || !promptText || !safetyDisplay) return;
+  safetyDisplay.textContent = link.safetyNumber || "482-915";
+  promptText.value = link.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${link.agentAId}' on AgentLink (https://agent.signetmesh.com).
+
+Verification & Safety Anchors:
+- Peer Agent ID: ${link.agentAId}
+- Mutual Safety Number: ${link.safetyNumber || "482-915"}
+- Purpose: ${link.note || "Cross-agent collaboration"}
+
+Instructions for your Agent:
+1. Confirm identity: python3 -m agent_link.cli whoami --agent-id "${link.agentBId}"
+2. Report Safety Number (${link.safetyNumber || "482-915"}) to human operator.
+3. Check link status: python3 -m agent_link.cli links --agent-id "${link.agentBId}" --json`;
+  modal.classList.remove("hidden");
+};
+window.showAgentPrompt = (inviteId) => {
+  const inv = cachedInvites.find((i) => i.id === inviteId);
+  if (!inv) return;
+  const modal = document.getElementById("agentPromptModal");
+  const safetyDisplay = document.getElementById("modalSafetyNumberDisplay");
+  const promptText = document.getElementById("modalAgentPromptText");
+  if (!modal || !promptText || !safetyDisplay) return;
+  safetyDisplay.textContent = inv.safetyNumber || "482-915";
+  promptText.value = inv.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${inv.fromAgentId || "peer"}' on AgentLink (https://agent.signetmesh.com).
+
+Mutual Safety Number: ${inv.safetyNumber || "482-915"}`;
+  modal.classList.remove("hidden");
+};
 window.approveLink = async (linkId) => {
+  const link = activeLinks.get(linkId);
+  const safetyNumber = link?.safetyNumber || "Verified";
+  const confirmed = confirm(
+    `\u{1F6E1}\uFE0F Trust Ceremony Confirmation
+
+Before approving, please confirm the mutual Safety Number with the peer operator:
+Safety Number: ${safetyNumber}
+
+Link: ${link?.agentAId || "Agent A"} \u27F7 ${link?.agentBId || "Agent B"}
+
+Click OK to authorize this cryptographic connection.`
+  );
+  if (!confirmed) return;
   try {
     await apiRequest(`/api/links/${encodeURIComponent(linkId)}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerVerification: "optical_qr_verified" })
+      body: JSON.stringify({
+        peerVerification: "optical_qr_verified",
+        safetyNumber: link?.safetyNumber
+      })
     });
-    await refreshPeerLinks();
+    await Promise.all([refreshPeerLinks(), refreshInvites()]);
   } catch (err) {
     alert(`Approval failed: ${err.message}`);
   }
@@ -3084,6 +3138,34 @@ btnOpenInviteModal?.addEventListener("click", () => {
 btnCloseInviteModal?.addEventListener("click", () => {
   inviteModal?.classList.add("hidden");
 });
+var lastInviteAgentPrompt = null;
+var inviteSafetyNumberDisplay = document.getElementById("inviteSafetyNumberDisplay");
+var btnCopyInviteAgentPrompt = document.getElementById("btnCopyInviteAgentPrompt");
+var agentPromptModal = document.getElementById("agentPromptModal");
+var btnCloseAgentPromptModal = document.getElementById("btnCloseAgentPromptModal");
+var btnCloseAgentPromptModalBtn = document.getElementById("btnCloseAgentPromptModalBtn");
+var btnCopyModalAgentPrompt = document.getElementById("btnCopyModalAgentPrompt");
+btnCloseAgentPromptModal?.addEventListener("click", () => agentPromptModal?.classList.add("hidden"));
+btnCloseAgentPromptModalBtn?.addEventListener("click", () => agentPromptModal?.classList.add("hidden"));
+btnCopyModalAgentPrompt?.addEventListener("click", () => {
+  const promptText = document.getElementById("modalAgentPromptText");
+  if (promptText && promptText.value) {
+    navigator.clipboard.writeText(promptText.value);
+    if (btnCopyModalAgentPrompt) btnCopyModalAgentPrompt.textContent = "\u2705 Copied!";
+    setTimeout(() => {
+      if (btnCopyModalAgentPrompt) btnCopyModalAgentPrompt.textContent = "\u{1F4CB} Copy Prompt to Clipboard";
+    }, 2e3);
+  }
+});
+btnCopyInviteAgentPrompt?.addEventListener("click", () => {
+  if (lastInviteAgentPrompt) {
+    navigator.clipboard.writeText(lastInviteAgentPrompt);
+    if (btnCopyInviteAgentPrompt) btnCopyInviteAgentPrompt.textContent = "\u2705 Copied!";
+    setTimeout(() => {
+      if (btnCopyInviteAgentPrompt) btnCopyInviteAgentPrompt.textContent = "\u{1F4CB} Copy Prompt for Your Agent";
+    }, 2e3);
+  }
+});
 inviteForm?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const toEmail = inviteRecipientEmail?.value.trim() || "";
@@ -3097,8 +3179,12 @@ inviteForm?.addEventListener("submit", async (e) => {
     });
     if (res.status === "ok") {
       lastInviteEmailTemplate = res.emailTemplate;
+      lastInviteAgentPrompt = res.agentPrompt || null;
       if (inviteUrlDisplay) {
-        inviteUrlDisplay.value = res.inviteUrl;
+        inviteUrlDisplay.value = res.inviteUrl || res.portalUrl || "";
+      }
+      if (inviteSafetyNumberDisplay) {
+        inviteSafetyNumberDisplay.textContent = res.safetyNumber || "---";
       }
       inviteResultBox?.classList.remove("hidden");
       clientLog("info", "invites", `Successfully created invite for ${toEmail}`);
@@ -3123,9 +3209,9 @@ btnCopyInviteEmail?.addEventListener("click", () => {
 
 ${lastInviteEmailTemplate.body}`;
     navigator.clipboard.writeText(fullText);
-    btnCopyInviteEmail.textContent = "\u2705 Email Copied!";
+    btnCopyInviteEmail.textContent = "\u2705 Notice Copied!";
     setTimeout(() => {
-      if (btnCopyInviteEmail) btnCopyInviteEmail.textContent = "\u{1F4CB} Copy Full Email Knowledge Template";
+      if (btnCopyInviteEmail) btnCopyInviteEmail.textContent = "\u{1F4CB} Copy Zero-Credential Notification Template";
     }, 2e3);
   }
 });
@@ -3159,8 +3245,6 @@ function renderInvites() {
     const recipient = escapeHtml(inv.recipientEmail);
     const target = inv.targetAgentId ? ` \u27F7 \u{1F916} ${escapeHtml(inv.targetAgentId)}` : "";
     const note = inv.note ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px; font-style: italic;">\u201C${escapeHtml(inv.note)}\u201D</div>` : "";
-    const originHost = window.location.origin;
-    const directInviteUrl = `${originHost}/?invite=${encodeURIComponent(inv.token)}`;
     return `
       <div class="invite-item" style="background: var(--bg-secondary); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap;">
@@ -3172,6 +3256,7 @@ function renderInvites() {
               <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 13px;">${sender}${target}</strong>
               <span style="color: var(--text-secondary); font-size: 12px;">\u2192</span>
               <span style="font-size: 12px; color: #38bdf8; font-family: var(--font-mono);">\u{1F4E7} ${recipient}</span>
+              ${inv.safetyNumber ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-family: var(--font-mono); font-size: 11px;">\u{1F6E1}\uFE0F Safety: ${escapeHtml(inv.safetyNumber)}</span>` : ""}
             </div>
             ${note}
             <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">
@@ -3188,8 +3273,8 @@ function renderInvites() {
                 \u2713 Form & Approve Link
               </button>
             ` : ""}
-            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="window.copyInviteUrl('${escapeHtml(directInviteUrl)}')">
-              \u{1F4CB} Copy Link
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="window.showAgentPrompt('${escapeHtml(inv.id)}')">
+              \u{1F4CB} Agent Prompt
             </button>
             <button type="button" class="btn btn-danger btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="window.dismissInvite('${escapeHtml(inv.id)}')">
               Dismiss

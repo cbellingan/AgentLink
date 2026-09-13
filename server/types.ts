@@ -39,18 +39,27 @@ export interface LinkMessageEntry {
   payload?: any;
 }
 
+export interface LinkApprovalDetail {
+  approved: boolean;
+  confirmedAt?: string;
+  confirmedKid?: string;
+  confirmedSafetyNumber?: string;
+}
+
 export interface LinkRecord {
   id: string;
   agentAId: string;
   agentBId: string;
-  initiatorHumanId: string;
+  initiatorHumanId?: string;
   responderHumanId?: string;
   initiatorHumanEmail?: string;
   responderHumanEmail?: string;
   status: 'pending_approval' | 'active' | 'revoked';
   createdAt: string;
   linkKey?: string;
-  approvals: Record<string, boolean>;
+  approvals: Record<string, boolean | LinkApprovalDetail>;
+  safetyNumber?: string;
+  agentPrompt?: string;
   bytesAtoB?: number;
   bytesBtoA?: number;
   framesCount?: number;
@@ -66,7 +75,9 @@ export interface InviteRecord {
   fromAgentId?: string;
   targetAgentId?: string;
   linkId?: string;
-  token: string;
+  token?: string;
+  safetyNumber?: string;
+  agentPrompt?: string;
   status: 'pending' | 'accepted' | 'expired' | 'revoked';
   createdAt: string;
   expiresAt: string;

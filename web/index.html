@@ -503,14 +503,64 @@
 
         <div id="inviteResultBox" class="hidden" style="margin-top: 16px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
           <div style="font-weight: 600; color: var(--accent); font-size: 13px; margin-bottom: 6px;">🎉 Invitation Generated!</div>
-          <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 10px 0;">Share this secure link or copy the formatted email template below:</p>
-          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <input type="text" id="inviteUrlDisplay" readonly style="flex: 1; padding: 6px 10px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; color: #38bdf8;" />
-            <button type="button" id="btnCopyInviteLink" class="btn btn-secondary btn-sm">📋 Copy Link</button>
+          <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 10px 0;">
+            Share the zero-credential connection notice or copy the prompt for your agent:
+          </p>
+          <div style="display: flex; gap: 12px; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px;">
+            <div style="font-size: 18px;">🛡️</div>
+            <div>
+              <div style="font-size: 10px; text-transform: uppercase; color: #10b981; font-weight: 600;">Mutual Safety Number</div>
+              <div id="inviteSafetyNumberDisplay" style="font-family: var(--font-mono); font-size: 15px; font-weight: 700; color: #34d399;">---</div>
+            </div>
           </div>
-          <button type="button" id="btnCopyInviteEmail" class="btn btn-secondary btn-sm" style="width: 100%;">
-            📋 Copy Full Email Knowledge Template
-          </button>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button type="button" id="btnCopyInviteAgentPrompt" class="btn" style="justify-content: center; font-size: 12px;">
+              📋 Copy Prompt for Your Agent
+            </button>
+            <button type="button" id="btnCopyInviteEmail" class="btn btn-secondary btn-sm" style="width: 100%;">
+              📋 Copy Zero-Credential Notification Template
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent Instructions & Trust Ceremony Modal -->
+    <div id="agentPromptModal" class="modal-overlay hidden" data-testid="agent-prompt-modal">
+      <div class="modal-content" style="max-width: 540px;">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">🛡️</span>
+            <h3 style="font-size: 15px; margin: 0;">Human-to-Agent Connection Instructions</h3>
+          </div>
+          <button type="button" id="btnCloseAgentPromptModal" class="modal-close-btn">&times;</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <p style="font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5;">
+            Copy and paste this prompt directly into your agent's conversational interface. It gives your agent the peer's public key fingerprint and mutual Safety Number to ensure an authenticated, fail-closed connection.
+          </p>
+
+          <div style="display: flex; gap: 12px; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 14px;">
+            <div style="font-size: 24px;">🔐</div>
+            <div>
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #10b981; font-weight: 600;">Mutual Safety Number</div>
+              <div id="modalSafetyNumberDisplay" style="font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: #34d399;">---</div>
+            </div>
+          </div>
+
+          <div>
+            <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 6px;">Prompt for Your Agent (Copy & Paste)</label>
+            <textarea id="modalAgentPromptText" readonly rows="9" style="width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); line-height: 1.4; resize: vertical;"></textarea>
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="btnCopyModalAgentPrompt" class="btn" style="flex: 1; justify-content: center;">
+              📋 Copy Prompt to Clipboard
+            </button>
+            <button type="button" id="btnCloseAgentPromptModalBtn" class="btn btn-secondary" style="padding: 0 16px;">
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>

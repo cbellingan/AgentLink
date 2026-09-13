@@ -401,4 +401,60 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     const stillPresent = afterInvitesRes.data.invites.find((inv: any) => inv.id === inviteId);
     expect(stillPresent).toBeUndefined();
   });
+
+  it('13. Secret-Free Connection Notices & Human-to-Agent Prompts: Invites carry 0 bearer credentials in notice body and generate agent prompts', async () => {
+    const inviteRes = await apiPost('/api/invites', {
+      toEmail: 'partner@example.com',
+      agentId: 'agent-alice',
+      targetAgentId: 'agent-bob',
+      note: 'Household task sync',
+    }, adminToken);
+    expect(inviteRes.status).toBe(201);
+    expect(inviteRes.data.status).toBe('ok');
+
+    // Verify mutual Safety Number
+    expect(inviteRes.data.safetyNumber).toMatch(/^\d{3}-\d{3}$/);
+    expect(inviteRes.data.invite.safetyNumber).toBe(inviteRes.data.safetyNumber);
+
+    // Verify human-to-agent prompt instructions
+    expect(inviteRes.data.agentPrompt).toBeDefined();
+    expect(inviteRes.data.agentPrompt).toContain('You are invited to establish an end-to-end encrypted (E2EE v2) peer link');
+    expect(inviteRes.data.agentPrompt).toContain(inviteRes.data.safetyNumber);
+    expect(inviteRes.data.agentPrompt).toContain('agent-alice');
+
+    // Verify email notice template is strictly secret-free in its body
+    const emailBody = inviteRes.data.emailTemplate.body;
+    expect(emailBody).toContain('Zero-Credential Notice');
+    expect(emailBody).toContain(`Safety Number (${inviteRes.data.safetyNumber})`);
+    expect(emailBody).toContain('Human-to-Agent Instructions:');
+    // Notice body must NOT contain the bearer token
+    expect(emailBody).not.toContain(inviteRes.data.invite.token);
+  });
+
+  it('14. Fingerprint-Bound Approval Ceremony: Approval records confirmed Key ID and Safety Number', async () => {
+    // Request fresh link between Alice and Bob
+    const linkRes = await apiPost('/api/links/request', {
+      agentAId: 'agent-alice',
+      agentBId: 'agent-bob',
+      initiatorHumanId: adminId,
+      responderHumanId: wifeId,
+    }, adminApiKey);
+    expect(linkRes.status).toBe(200);
+    const linkObj = linkRes.data.link;
+    expect(linkObj.safetyNumber).toMatch(/^\d{3}-\d{3}$/);
+    expect(linkObj.agentPrompt).toContain(linkObj.safetyNumber);
+
+    // Admin approves with Safety Number confirmation
+    const approveRes = await apiPost(`/api/links/${linkObj.id}/approve`, {
+      safetyNumber: linkObj.safetyNumber,
+      peerVerification: 'optical_qr_verified',
+    }, adminToken);
+    expect(approveRes.status).toBe(200);
+    const updatedLink = approveRes.data.link;
+    expect(updatedLink.approvals[adminId]).toBe(true);
+    expect(updatedLink.approvalDetails).toBeDefined();
+    expect(updatedLink.approvalDetails[adminId].approved).toBe(true);
+    expect(updatedLink.approvalDetails[adminId].confirmedSafetyNumber).toBe(linkObj.safetyNumber);
+    expect(updatedLink.approvalDetails[adminId].confirmedKid).toBe('kid-alice-001');
+  });
 });
