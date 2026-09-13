@@ -94,3 +94,16 @@ export interface ClientLogEntry {
   ip?: string;
 }
 
+export interface BugReportRecord {
+  id: string;
+  agentId?: string;
+  title: string;
+  details: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  context?: any;
+  timestamp: string;
+  ip?: string;
+  userAgent?: string;
+  resolved: boolean;
+}
+

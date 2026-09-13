@@ -30,6 +30,10 @@ var AgentLinkServer = class {
   // agentId -> resolvers
   accessLogs = [];
   clientLogs = [];
+  bugReports = [];
+  bugLogPath;
+  bugRateLimits = /* @__PURE__ */ new Map();
+  // key -> timestamps
   supervisorSockets = /* @__PURE__ */ new Set();
   stateFilePath;
   constructor(port2 = 3e3, staticPath2) {
@@ -46,8 +50,46 @@ var AgentLinkServer = class {
     if (!fs.existsSync(stateDir)) {
       fs.mkdirSync(stateDir, { recursive: true });
     }
+    if (process.env.BUG_LOG_PATH) {
+      this.bugLogPath = path.resolve(process.env.BUG_LOG_PATH);
+    } else {
+      this.bugLogPath = path.resolve(".data/bugs/bug-reports.jsonl");
+    }
+    const bugDir = path.dirname(this.bugLogPath);
+    if (!fs.existsSync(bugDir)) {
+      fs.mkdirSync(bugDir, { recursive: true });
+    }
     this.loadState();
+    this.loadBugReports();
     this.discoverLocalAgents();
+  }
+  loadBugReports() {
+    try {
+      if (fs.existsSync(this.bugLogPath)) {
+        const raw = fs.readFileSync(this.bugLogPath, "utf8");
+        const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+        this.bugReports = lines.map((l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        }).filter((b) => b !== null);
+      }
+    } catch (err) {
+      console.warn("[BUG-LOG] Failed to load previous bug reports:", err);
+    }
+  }
+  checkBugRateLimit(key, maxPerWindow = 5, windowMs = 6e4) {
+    const now = Date.now();
+    const timestamps = (this.bugRateLimits.get(key) || []).filter((t) => now - t < windowMs);
+    if (timestamps.length >= maxPerWindow) {
+      this.bugRateLimits.set(key, timestamps);
+      return false;
+    }
+    timestamps.push(now);
+    this.bugRateLimits.set(key, timestamps);
+    return true;
   }
   loadState() {
     try {
@@ -286,12 +328,35 @@ var AgentLinkServer = class {
     }
     const parsedUrl = req.url ? req.url.split("?")[0] : "/";
     try {
-      const readJson = (callback) => {
+      const readJson = (callback, maxBytes) => {
+        const contentLengthHeader = req.headers["content-length"];
+        const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : null;
+        if (maxBytes && contentLength !== null && !isNaN(contentLength) && contentLength > maxBytes) {
+          this.sendJson(res, 413, {
+            error: "payload_too_large",
+            message: `Payload exceeds maximum allowed size of ${maxBytes} bytes`
+          });
+          return;
+        }
         let data = "";
+        let receivedBytes = 0;
+        let aborted = false;
         req.on("data", (chunk) => {
+          if (aborted) return;
+          receivedBytes += chunk.length;
+          if (maxBytes && receivedBytes > maxBytes) {
+            aborted = true;
+            this.sendJson(res, 413, {
+              error: "payload_too_large",
+              message: `Payload exceeds maximum allowed size of ${maxBytes} bytes`
+            });
+            req.destroy();
+            return;
+          }
           data += chunk;
         });
         req.on("end", () => {
+          if (aborted) return;
           try {
             callback(data ? JSON.parse(data) : {});
           } catch {
@@ -1032,6 +1097,90 @@ Note: Traffic is held in pending state until both you and ${human.name || human.
           accessLogs: this.accessLogs.slice(-100),
           clientLogs: this.clientLogs.slice(-100)
         });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl === "/api/bugs") {
+        readJson((body) => {
+          const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "127.0.0.1";
+          const rawAgentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
+          const rateKey = rawAgentId ? `agent:${rawAgentId}` : `ip:${clientIp}`;
+          if (!this.checkBugRateLimit(rateKey, 5, 6e4)) {
+            this.sendJson(res, 429, {
+              error: "rate_limited",
+              message: "Too many bug reports submitted. Rate limit is 5 submissions per minute. Please try again later."
+            });
+            return;
+          }
+          const title = typeof body.title === "string" ? body.title.trim() : "";
+          const details = typeof body.details === "string" ? body.details.trim() : "";
+          if (!title && !details) {
+            this.sendJson(res, 400, {
+              error: "invalid_request",
+              message: "Bug report requires at least a title or details."
+            });
+            return;
+          }
+          const validSeverities = ["low", "medium", "high", "critical"];
+          const severity = validSeverities.includes(body.severity) ? body.severity : "medium";
+          const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+          const record = {
+            id: bugId,
+            agentId: rawAgentId || void 0,
+            title: title || "Untitled Bug Report",
+            details: details || "(No additional details provided)",
+            severity,
+            context: body.context || void 0,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            ip: clientIp,
+            userAgent: req.headers["user-agent"] || void 0,
+            resolved: false
+          };
+          try {
+            fs.appendFileSync(this.bugLogPath, JSON.stringify(record) + "\n", "utf8");
+          } catch (err) {
+            console.error("[BUG-LOG ERROR] Failed to append bug report:", err);
+          }
+          this.bugReports.push(record);
+          if (this.bugReports.length > 500) this.bugReports.shift();
+          console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || "anonymous"})`);
+          this.sendJson(res, 201, {
+            status: "ok",
+            bugId: record.id,
+            report: record
+          });
+        }, 10240);
+        return;
+      }
+      if (req.method === "GET" && parsedUrl === "/api/bugs") {
+        const urlObj = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+        const limit = parseInt(urlObj.searchParams.get("limit") || "100", 10);
+        const agentId = urlObj.searchParams.get("agentId");
+        let reports = this.bugReports;
+        if (agentId) {
+          reports = reports.filter((r) => r.agentId === agentId);
+        }
+        this.sendJson(res, 200, {
+          status: "ok",
+          count: reports.length,
+          bugs: reports.slice(-limit)
+        });
+        return;
+      }
+      const bugResolveMatch = parsedUrl.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
+      if (req.method === "POST" && bugResolveMatch) {
+        const bugId = bugResolveMatch[1];
+        const bug = this.bugReports.find((b) => b.id === bugId);
+        if (!bug) {
+          this.sendJson(res, 404, { error: "not_found", message: "Bug report not found" });
+          return;
+        }
+        bug.resolved = true;
+        try {
+          fs.writeFileSync(this.bugLogPath, this.bugReports.map((b) => JSON.stringify(b)).join("\n") + "\n", "utf8");
+        } catch (err) {
+          console.error("[BUG-LOG ERROR] Failed to sync bug resolution:", err);
+        }
+        this.sendJson(res, 200, { status: "ok", bug });
         return;
       }
       this.serveStatic(req, res, parsedUrl);

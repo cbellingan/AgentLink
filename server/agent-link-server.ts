@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
-import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, InviteRecord, AccessLogEntry, ClientLogEntry } from './types.js';
+import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -30,6 +30,9 @@ export class AgentLinkServer {
   private pollWaiters: Map<string, Array<(msgs: any[]) => boolean>> = new Map(); // agentId -> resolvers
   private accessLogs: AccessLogEntry[] = [];
   private clientLogs: ClientLogEntry[] = [];
+  private bugReports: BugReportRecord[] = [];
+  private bugLogPath: string;
+  private bugRateLimits: Map<string, number[]> = new Map(); // key -> timestamps
   private supervisorSockets: Set<WebSocket> = new Set();
   private stateFilePath: string;
 
@@ -47,8 +50,50 @@ export class AgentLinkServer {
     if (!fs.existsSync(stateDir)) {
       fs.mkdirSync(stateDir, { recursive: true });
     }
+
+    if (process.env.BUG_LOG_PATH) {
+      this.bugLogPath = path.resolve(process.env.BUG_LOG_PATH);
+    } else {
+      this.bugLogPath = path.resolve('.data/bugs/bug-reports.jsonl');
+    }
+    const bugDir = path.dirname(this.bugLogPath);
+    if (!fs.existsSync(bugDir)) {
+      fs.mkdirSync(bugDir, { recursive: true });
+    }
+
     this.loadState();
+    this.loadBugReports();
     this.discoverLocalAgents();
+  }
+
+  private loadBugReports(): void {
+    try {
+      if (fs.existsSync(this.bugLogPath)) {
+        const raw = fs.readFileSync(this.bugLogPath, 'utf8');
+        const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+        this.bugReports = lines.map(l => {
+          try {
+            return JSON.parse(l) as BugReportRecord;
+          } catch {
+            return null;
+          }
+        }).filter((b): b is BugReportRecord => b !== null);
+      }
+    } catch (err) {
+      console.warn('[BUG-LOG] Failed to load previous bug reports:', err);
+    }
+  }
+
+  private checkBugRateLimit(key: string, maxPerWindow: number = 5, windowMs: number = 60000): boolean {
+    const now = Date.now();
+    const timestamps = (this.bugRateLimits.get(key) || []).filter(t => now - t < windowMs);
+    if (timestamps.length >= maxPerWindow) {
+      this.bugRateLimits.set(key, timestamps);
+      return false;
+    }
+    timestamps.push(now);
+    this.bugRateLimits.set(key, timestamps);
+    return true;
   }
 
   private loadState(): void {
@@ -334,10 +379,38 @@ export class AgentLinkServer {
 
     try {
 
-    const readJson = (callback: (body: any) => void) => {
+    const readJson = (callback: (body: any) => void, maxBytes?: number) => {
+      const contentLengthHeader = req.headers['content-length'];
+      const contentLength = contentLengthHeader ? parseInt(contentLengthHeader as string, 10) : null;
+      if (maxBytes && contentLength !== null && !isNaN(contentLength) && contentLength > maxBytes) {
+        this.sendJson(res, 413, {
+          error: 'payload_too_large',
+          message: `Payload exceeds maximum allowed size of ${maxBytes} bytes`,
+        });
+        return;
+      }
+
       let data = '';
-      req.on('data', chunk => { data += chunk; });
+      let receivedBytes = 0;
+      let aborted = false;
+
+      req.on('data', chunk => {
+        if (aborted) return;
+        receivedBytes += chunk.length;
+        if (maxBytes && receivedBytes > maxBytes) {
+          aborted = true;
+          this.sendJson(res, 413, {
+            error: 'payload_too_large',
+            message: `Payload exceeds maximum allowed size of ${maxBytes} bytes`,
+          });
+          req.destroy();
+          return;
+        }
+        data += chunk;
+      });
+
       req.on('end', () => {
+        if (aborted) return;
         try {
           callback(data ? JSON.parse(data) : {});
         } catch {
@@ -1220,7 +1293,106 @@ export class AgentLinkServer {
       return;
     }
 
-    // 13. Static Web Files
+    // 13. Autonomous Bug Reporting System (Cleartext, Max 10 KB, Rate-Limited)
+    if (req.method === 'POST' && parsedUrl === '/api/bugs') {
+      // 10 KB size limit = 10,240 bytes
+      readJson((body) => {
+        const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+        const rawAgentId = typeof body.agentId === 'string' ? body.agentId.trim() : '';
+        const rateKey = rawAgentId ? `agent:${rawAgentId}` : `ip:${clientIp}`;
+
+        if (!this.checkBugRateLimit(rateKey, 5, 60000)) {
+          this.sendJson(res, 429, {
+            error: 'rate_limited',
+            message: 'Too many bug reports submitted. Rate limit is 5 submissions per minute. Please try again later.',
+          });
+          return;
+        }
+
+        const title = typeof body.title === 'string' ? body.title.trim() : '';
+        const details = typeof body.details === 'string' ? body.details.trim() : '';
+
+        if (!title && !details) {
+          this.sendJson(res, 400, {
+            error: 'invalid_request',
+            message: 'Bug report requires at least a title or details.',
+          });
+          return;
+        }
+
+        const validSeverities: BugReportRecord['severity'][] = ['low', 'medium', 'high', 'critical'];
+        const severity: BugReportRecord['severity'] = validSeverities.includes(body.severity) ? body.severity : 'medium';
+
+        const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        const record: BugReportRecord = {
+          id: bugId,
+          agentId: rawAgentId || undefined,
+          title: title || 'Untitled Bug Report',
+          details: details || '(No additional details provided)',
+          severity,
+          context: body.context || undefined,
+          timestamp: new Date().toISOString(),
+          ip: clientIp,
+          userAgent: (req.headers['user-agent'] as string) || undefined,
+          resolved: false,
+        };
+
+        try {
+          fs.appendFileSync(this.bugLogPath, JSON.stringify(record) + '\n', 'utf8');
+        } catch (err) {
+          console.error('[BUG-LOG ERROR] Failed to append bug report:', err);
+        }
+
+        this.bugReports.push(record);
+        if (this.bugReports.length > 500) this.bugReports.shift();
+
+        console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || 'anonymous'})`);
+
+        this.sendJson(res, 201, {
+          status: 'ok',
+          bugId: record.id,
+          report: record,
+        });
+      }, 10240);
+      return;
+    }
+
+    if (req.method === 'GET' && parsedUrl === '/api/bugs') {
+      const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
+      const agentId = urlObj.searchParams.get('agentId');
+      let reports = this.bugReports;
+      if (agentId) {
+        reports = reports.filter(r => r.agentId === agentId);
+      }
+      this.sendJson(res, 200, {
+        status: 'ok',
+        count: reports.length,
+        bugs: reports.slice(-limit),
+      });
+      return;
+    }
+
+    const bugResolveMatch = parsedUrl.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
+    if (req.method === 'POST' && bugResolveMatch) {
+      const bugId = bugResolveMatch[1];
+      const bug = this.bugReports.find(b => b.id === bugId);
+      if (!bug) {
+        this.sendJson(res, 404, { error: 'not_found', message: 'Bug report not found' });
+        return;
+      }
+      bug.resolved = true;
+      try {
+        // Rewrite bug log with updated resolved states
+        fs.writeFileSync(this.bugLogPath, this.bugReports.map(b => JSON.stringify(b)).join('\n') + '\n', 'utf8');
+      } catch (err) {
+        console.error('[BUG-LOG ERROR] Failed to sync bug resolution:', err);
+      }
+      this.sendJson(res, 200, { status: 'ok', bug });
+      return;
+    }
+
+    // 14. Static Web Files
     this.serveStatic(req, res, parsedUrl);
     } catch (err: any) {
       console.error(`[SERVER ERROR] ${req.method} ${req.url}:`, err);

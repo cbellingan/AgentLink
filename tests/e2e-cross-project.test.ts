@@ -348,5 +348,30 @@ print("PYTHON_LIST_AND_HEADERS_OK")
     expect(skillContent).toContain("register");
     expect(skillContent).toContain("ASCII QR");
     expect(skillContent).toContain("cbellingan@gmail.com");
+    expect(skillContent).toContain("Autonomous Bug Reporting System");
+    expect(skillContent).toContain("10 KB");
+  });
+
+  it('Step 9: Autonomous bug report submission via CLI subprocess to server', async () => {
+    const cliPath = '/Users/cb/Documents/antigravity/agent-link-cli';
+    const aliceKeysDir = path.join(tempDir, 'alice_keys');
+
+    const { stdout } = await execFileAsync('python3', [
+      '-m', 'agent_link.cli',
+      'bug-report',
+      '--title', 'E2E Cross-Project Test Anomaly Report',
+      '--details', 'Simulated autonomous agent operational fault telemetry for e2e validation',
+      '--severity', 'medium',
+      '--agent-id', 'agent-alice',
+      '--server', baseUrl,
+      '--key-dir', aliceKeysDir,
+      '--json',
+    ], { cwd: cliPath });
+
+    const bugResult = JSON.parse(stdout.trim());
+    expect(bugResult.status).toBe('ok');
+    expect(bugResult.bugId).toMatch(/^bug_/);
+    expect(bugResult.report.title).toBe('E2E Cross-Project Test Anomaly Report');
+    expect(bugResult.report.agentId).toBe('agent-alice');
   });
 });
