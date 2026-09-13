@@ -21,6 +21,21 @@ Production is live, connected to the Cloudflare Zero Trust Named Tunnel (`https:
 
 ---
 
+## Rule 1: Always Reproduce Before Fixing (Red-Green-Refactor For Every Bug)
+
+Whenever investigating or diagnosing any bug, anomaly, or regression:
+1. **Never jump straight to writing a fix**: Do not change application logic until the bug is proven and reproducible in an automated test.
+2. **Step 1 — The Reproduction Test (Red Phase)**:
+   - Write a unit, integration, or synthetic test that directly triggers the reported symptom (e.g. socket reset, truncated chunk, authorization bypass, or timeout).
+   - Execute the test and confirm that it **fails** for the exact reason observed in production or reported by the client/peer.
+3. **Step 2 — The Minimal Targeted Fix (Green Phase)**:
+   - Implement the targeted architectural or code fix.
+   - Run the reproduction test and confirm that it turns **green** without side effects.
+4. **Step 3 — Permanent Regression Barrier**:
+   - The reproduction test must **never be deleted or discarded**. It is permanently committed to the test suite (`tests/server.test.ts`, `tests/test_cli.py`, or `scripts/smoke-test.mjs`), ensuring that our automated test base continuously grows stronger and that the issue can never silently re-occur.
+
+---
+
 ## The 5 Invariants of Transport & API Design
 
 Whenever designing, modifying, or testing any endpoint, client SDK, or deployment script, the following five invariants must be strictly enforced:

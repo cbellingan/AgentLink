@@ -190,4 +190,46 @@ describe('AgentLink Server Test Suite', () => {
     expect(getData.link.recentMessages[0].targetId).toBe('ted-agent');
     expect(getData.link.recentMessages[0].text).toBe('Hello Ted from the UI!');
   });
+
+  it('7. Regression: Server configures keepAliveTimeout >= 120s and sets Keep-Alive response header', async () => {
+    // Reverse proxy keep-alive alignment with cloudflared (90s idle timeout)
+    expect(server.server.keepAliveTimeout).toBeGreaterThanOrEqual(120000);
+    expect(server.server.headersTimeout).toBeGreaterThanOrEqual(125000);
+
+    const res = await fetch(`${baseUrl}/api/server-info`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('keep-alive')).toBe('timeout=120, max=1000');
+    expect(res.headers.get('content-length')).toBeTruthy();
+  });
+
+  it('8. Regression: GET /api/agents strips heavy qrPayload to prevent chunked response truncation', async () => {
+    const res = await fetch(`${baseUrl}/api/agents`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(Array.isArray(data.agents)).toBe(true);
+    expect(data.agents.length).toBeGreaterThan(0);
+
+    // Every agent in the fleet listing MUST NOT have qrPayload to maintain compact payloads
+    for (const agent of data.agents) {
+      expect(agent.qrPayload).toBeUndefined();
+      expect(agent.id).toBeTruthy();
+      expect(agent.signPub).toBeTruthy();
+      expect(agent.encPub).toBeTruthy();
+    }
+  });
+
+  it('9. Regression: Direct lookup and filtered query preserve single agent details', async () => {
+    // Single agent lookup by ID
+    const singleRes = await fetch(`${baseUrl}/api/agents/ted-agent`);
+    expect(singleRes.status).toBe(200);
+    const singleData = await singleRes.json();
+    expect(singleData.agent.id).toBe('ted-agent');
+
+    // Filtered query via ?agentId=ted-agent
+    const filterRes = await fetch(`${baseUrl}/api/agents?agentId=ted-agent`);
+    expect(filterRes.status).toBe(200);
+    const filterData = await filterRes.json();
+    expect(filterData.agents.length).toBe(1);
+    expect(filterData.agents[0].id).toBe('ted-agent');
+  });
 });
