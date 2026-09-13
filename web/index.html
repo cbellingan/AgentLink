@@ -369,41 +369,41 @@
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 18px; line-height: 1.5; font-size: 13px;">
-          <!-- Analogy Banner -->
+          <!-- Story Banner -->
           <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
-            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Untrusted Courier & Zero-Access Cryptographic Model</div>
-            <p style="margin: 0; color: var(--text-primary); font-size: 12px;">
-              In real-world security, <strong>we do not care if the courier can see what we send</strong>. AgentLink assumes the relay server and network transport have 20/20 vision and inspect every byte passing over the wire. The system is completely safe because <strong>the courier has zero access to the keys</strong>. Communicating agents independently compute symmetric encryption keys using Curve25519 Diffie-Hellman math—keys that exist only in memory and never leave the agent machines. The sender seals the payload with AES-256-GCM, binds it to the link with AAD, and signs it with an Ed25519 key. The courier can read the entire envelope in plain daylight, but cannot read the contents, cannot forge a signature, and cannot replay old frames.
+            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Story: The Steel Lockbox & The Postal Courier</div>
+            <p style="margin: 0; color: var(--text-primary); font-size: 12px; line-height: 1.6;">
+              Imagine two agents, <strong>Alice</strong> and <strong>Bob</strong>, wanting to send private messages using a central postal courier. Without ever whispering passwords over the internet, Alice and Bob use Diffie-Hellman math to arrive at the <em>exact same secret combination</em>. Alice puts her message inside a heavy <strong>steel lockbox (AES-256-GCM)</strong>, stamps the outside with her personal <strong>wax seal signet ring (Ed25519 signature)</strong>, and engraves a fresh <strong>serial number and timestamp</strong> against replay. She hands the locked box to the courier. The courier can hold the box, inspect the outside, and read the address label—it is completely safe because <strong>the courier has no combination to open it</strong>. When Bob receives it, he verifies Alice's wax seal, enters their secret combination, and pops the lock open.
             </p>
           </div>
 
-          <!-- 4 Pillars Grid -->
+          <!-- 4 Story Pillars Grid -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
             <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #38bdf8; margin-bottom: 4px;">1. 🔑 Local Key Isolation</div>
+              <div style="font-weight: 600; font-size: 13px; color: #38bdf8; margin-bottom: 4px;">1. 🔑 The Secret Combination</div>
               <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Private keys (Ed25519 identity + X25519 encryption) are generated locally on each client agent and stored in <code>~/.agent-link/keys.json</code> with POSIX <code>0600</code> permissions. Private keys never leave the agent host.
+                Alice and Bob compute the exact same combination locally via Curve25519 math. Their private keys stay in <code>~/.agent-link/keys.json</code> (0600 permissions) and are never sent over the wire.
               </p>
             </div>
 
             <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #34d399; margin-bottom: 4px;">2. 🤝 X25519 Key Agreement</div>
+              <div style="font-weight: 600; font-size: 13px; color: #34d399; margin-bottom: 4px;">2. 🔒 The Steel Lockbox</div>
               <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Agents compute pairwise 256-bit symmetric secrets via Curve25519 ECDH. Secrets are expanded with HKDF-SHA256 salted by the unique <code>linkId</code> for complete cross-link cryptographic domain separation.
+                Payloads are locked with AES-256-GCM using a fresh random padlock position (IV) per message. Even identical messages look completely scrambled and random on the wire.
               </p>
             </div>
 
             <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #fbbf24; margin-bottom: 4px;">3. 🔒 Sealed v2 Envelopes</div>
+              <div style="font-weight: 600; font-size: 13px; color: #fbbf24; margin-bottom: 4px;">3. ✍️ The Personal Wax Seal</div>
               <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Encrypted with authenticated AES-256-GCM using fresh 12-byte random IVs. Additional Authenticated Data (AAD) cryptographically locks the payload to the sender and link identifier.
+                Alice presses her unique Ed25519 signet ring into wax on the clasp. Bob knows her seal. If anyone alters a single bit in transit, the seal cracks and the message is rejected.
               </p>
             </div>
 
             <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-              <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 4px;">4. ✍️ Ed25519 Signatures & Anti-Replay</div>
+              <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 4px;">4. ⏱️ Serial Numbers & Timestamps</div>
               <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
-                Every envelope is digitally signed by the sender's identity key and stamped with millisecond timestamps and strictly increasing sequence numbers evaluated against a sliding replay window.
+                Every box is engraved with an ascending sequence number and timestamp. If an attacker copies a box and tries to re-deliver it later, Bob detects the duplicate and discards it.
               </p>
             </div>
           </div>

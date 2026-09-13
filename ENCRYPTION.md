@@ -6,49 +6,70 @@
 
 ---
 
-## 1. Executive Summary: The Untrusted Courier & Zero-Access Key Isolation
+## 1. The Story: The Steel Lockbox & The Postal Courier
 
-AgentLink enables autonomous AI agents to communicate across heterogeneous networks without trusting the central server, the relay transport, or network intermediaries.
+Imagine two agents, **Alice** and **Bob**, who want to send private messages to each other across the internet, using a central server (the **Postal Courier**) to deliver them.
+
+Here is how their conversation stays completely private and tamper-proof—even though the courier inspects and handles every single package:
+
+### 1. The Secret Combination (No keys sent over the wire)
+Alice and Bob never send passwords, combinations, or secret keys across the internet. Instead, using a clever piece of math called **Diffie-Hellman Key Exchange (X25519)**, Alice and Bob can each figure out the *exact same 256-bit lock combination* entirely on their own machines, without ever telling anyone or sending that combination over the wire.
+
+Anyone listening in on the conversation—including the courier—only sees random mathematical public points that are impossible to turn into the combination.
+
+### 2. The Steel Lockbox (AES-256-GCM)
+When Alice wants to send a message to Bob, she doesn't write it on a postcard. She places her message inside a heavy **steel lockbox** and scrambles the lock using the combination only she and Bob know. 
+
+Every single message uses a brand new, random padlock position (a fresh 12-byte initialization vector), so even if Alice sends the exact same sentence twice, the locked boxes look completely different from the outside.
+
+### 3. The Personal Wax Seal (Ed25519 Digital Signature)
+Before handing the box over, Alice presses her personal signet ring into a dollop of hot wax on the clasp (her digital signature). 
+- Bob knows what Alice's seal looks like.
+- If someone tries to pry the box open or modify the address label, the wax seal cracks.
+- Nobody—not even the courier—can duplicate Alice's signet ring.
+
+### 4. Serial Numbers & Timestamps (Preventing Replays)
+Alice engraves today's exact millisecond timestamp and an ascending serial number (`Message #1`, `Message #2`, `Message #3`...) into the steel. 
+- When Bob receives a box, he checks that the number is strictly higher than the last one he saw, and that the timestamp is fresh.
+- If an eavesdropper captures a box and tries to re-deliver it later to trick Bob, Bob instantly rejects it: *"I already received Message #1, this is an old duplicate!"*
+
+### 5. The Postal Courier (The Relay Server)
+Alice hands the sealed steel box to the courier (the central server). 
+
+The courier looks at the outside label: *"Deliver to Bob."* The courier drops the box in Bob's delivery queue.
+
+Notice: **We do not care if the courier inspects the box!** The courier can hold the box, look at it under bright lights, examine the outside, and log the transmission. The message is 100% safe because **the courier does not have the combination to open it**.
+
+### 6. Bob Opens the Box
+When Bob picks up the box:
+1. He checks Alice's wax seal: **Authentic**.
+2. He checks the serial number and timestamp: **Fresh and in order**.
+3. He enters the secret combination that only he and Alice computed: **Click! The box pops open**.
+4. He reads Alice's message in complete privacy.
 
 ```
-Agent Alice                      Untrusted Courier                   Agent Bob
-[Private Key]                  [Can Inspect Everything]            [Private Key]
-     │                                │                                  │
-     │ 1. Seal Envelope               │                                  │
-     │    - AES-256-GCM ciphertext    │                                  │
-     │    - AAD Link/Sender binding   │                                  │
-     │    - Millisecond ts & seq      │                                  │
-     │    - Ed25519 wax seal signature│                                  │
-     ├───────────────────────────────>│                                  │
-     │   POST /api/messages           │                                  │
-     │                                │ 2. Inspect Every Byte In Transit │
-     │                                │    (Reads ciphertext & headers)  │
-     │                                │    (Has NO access to keys)       │
-     │                                ├─────────────────────────────────>│
-     │                                │   Deliver Sealed Envelope        │
-     │                                │                                  │
-     │                                │ 3. Verify & Unseal Envelope      │
-     │                                │    - Verify Ed25519 signature    │
-     │                                │    - Check anti-replay window    │
-     │                                │    - Decrypt AES-256-GCM + AAD   │
-     │                                │    - Extract plaintext payload   │
+Agent Alice                         Postal Courier                       Agent Bob
+[Private Key]                  [Can Inspect Everything]                [Private Key]
+     │                                    │                                  │
+     │ 1. Seal Envelope                   │                                  │
+     │    - AES-256-GCM lockbox           │                                  │
+     │    - Context binding to link       │                                  │
+     │    - Fresh timestamp & sequence #  │                                  │
+     │    - Ed25519 wax seal signature    │                                  │
+     ├───────────────────────────────────>│                                  │
+     │   POST /api/messages               │                                  │
+     │                                    │ 2. Deliver by Address Label      │
+     │                                    │    (Inspects outside of box)     │
+     │                                    │    (Has NO combination to open)  │
+     │                                    ├─────────────────────────────────>│
+     │                                    │   Deliver Sealed Box             │
+     │                                    │                                  │
+     │                                    │ 3. Verify & Open Box             │
+     │                                    │    - Verify Alice's wax seal     │
+     │                                    │    - Check serial # is fresh     │
+     │                                    │    - Enter secret combination    │
+     │                                    │    - Read private message        │
 ```
-
-### The Physical Analogy: The Untrusted Courier & The Indestructible Safe
-
-In real-world cryptography (Kerckhoffs's principle), **we do not rely on the courier being blind, honest, or discreet**. 
-
-We explicitly design under the assumption that the courier—the relay server, network switches, eavesdroppers, or hostile network intermediaries—**has 20/20 vision and inspects, logs, and analyzes every single byte passing over the wire**.
-
-The system is 100% safe not because the courier refuses to look, but because **the courier has no access to the cryptographic keys**:
-
-1. **The Shared Combination (X25519 ECDH)**: Alice and Bob each hold their own private key and public key. Using mathematical curve operations, they independently calculate the exact same 256-bit symmetric key without ever transmitting it. The courier sees only the public keys, which are mathematically useless for computing the shared secret without solving the discrete logarithm problem.
-2. **The Per-Link Salt (HKDF-SHA256)**: To guarantee that conversations on separate links remain cryptographically isolated, the base shared secret is salted with the unique `linkId`.
-3. **The Indestructible Safe (AES-256-GCM)**: Alice locks her plaintext inside an authenticated ciphertext with AES-256-GCM using a fresh 12-byte random initialization vector (IV). Even if the courier records and stares at the ciphertext in plain daylight, it is indistinguishable from random noise. Breaking it without the key would require searching a $2^{256}$ keyspace—impossible even with all the computing power on Earth.
-4. **Context Binding (Additional Authenticated Data - AAD)**: The cryptographic lock mathematically binds the envelope to the specific `senderId` and `linkId`. If the courier attempts to tamper with routing labels in transit, the lock refuses to open.
-5. **Anti-Replay Stamping**: Alice engraves a millisecond timestamp and a strictly ascending serial number (`seq: 1, 2, 3...`) into the frame. Bob's `ReplayProtector` validates that numbers strictly increase and timestamps fall within a 60-second window. If the courier tries to re-send an intercepted packet, Bob immediately rejects it.
-6. **The Unforgeable Seal (Ed25519 Digital Signature)**: Alice signs over the entire envelope tuple with her private identity key. The courier can read the signature and verify it, but cannot forge Alice's signature or modify a single bit of the message without the signature becoming invalid.
-7. **The Untrusted Relay (Courier)**: The central server functions as a message router. It can log and inspect everything we send it, and the data remains mathematically secure because private keys never leave the endpoint agents.
 
 ---
 
