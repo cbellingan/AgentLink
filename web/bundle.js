@@ -2131,15 +2131,13 @@ var modalAgentKid = document.getElementById("modalAgentKid");
 var modalAgentQrJson = document.getElementById("modalAgentQrJson");
 var btnCopyModalQrJson = document.getElementById("btnCopyModalQrJson");
 var googleConsentModal = document.getElementById("googleConsentModal");
-var googleAccountChooserView = document.getElementById("googleAccountChooserView");
-var googleAnotherAccountView = document.getElementById("googleAnotherAccountView");
-var googleAccountCarl = document.getElementById("googleAccountCarl");
-var btnUseAnotherGoogleAccount = document.getElementById("btnUseAnotherGoogleAccount");
+var formGoogleSignInModal = document.getElementById("formGoogleSignInModal");
+var inputGoogleEmail = document.getElementById("inputGoogleEmail");
 var btnCancelGoogleConsent = document.getElementById("btnCancelGoogleConsent");
-var btnConfirmGoogleConsent = document.getElementById("btnConfirmGoogleConsent");
-var formAnotherGoogleAccount = document.getElementById("formAnotherGoogleAccount");
-var inputAnotherGoogleEmail = document.getElementById("inputAnotherGoogleEmail");
-var btnBackToGoogleChooser = document.getElementById("btnBackToGoogleChooser");
+var aboutModal = document.getElementById("aboutModal");
+var btnOpenAboutModal = document.getElementById("btnOpenAboutModal");
+var btnCloseAboutModal = document.getElementById("btnCloseAboutModal");
+var linkAboutEncryptionLanding = document.getElementById("linkAboutEncryptionLanding");
 var sessionToken = localStorage.getItem("agentlink_token") || "";
 var currentUser = null;
 var fleetAgents = /* @__PURE__ */ new Map();
@@ -2185,8 +2183,8 @@ function unlockDashboard(user, token) {
   localStorage.setItem("agentlink_user", JSON.stringify(user));
   landingCard.classList.add("hidden");
   dashboardCard.classList.remove("hidden");
-  userName.textContent = user.name || "Carl Bellingan";
-  userEmail.textContent = user.email || "cbellingan@gmail.com";
+  userName.textContent = user.name || "Human Authority";
+  userEmail.textContent = user.email || "";
   refreshDashboard();
 }
 function lockLanding() {
@@ -2217,16 +2215,18 @@ async function apiRequest(path, options = {}) {
   return data;
 }
 function openGoogleConsentModal() {
-  clientLog("info", "auth_ui", "Opening Google Account Chooser & Permissions Consent modal");
+  clientLog("info", "auth_ui", "Opening Google Sign-In modal");
   hideNotEnabled();
-  googleAccountChooserView?.classList.remove("hidden");
-  googleAnotherAccountView?.classList.add("hidden");
-  if (inputAnotherGoogleEmail) inputAnotherGoogleEmail.value = "";
   googleConsentModal?.classList.remove("hidden");
+  if (inputGoogleEmail) {
+    inputGoogleEmail.value = "";
+    setTimeout(() => inputGoogleEmail.focus(), 50);
+  }
 }
 function closeGoogleConsentModal() {
-  clientLog("info", "auth_ui", "Closing Google Account Chooser modal");
+  clientLog("info", "auth_ui", "Closing Google Sign-In modal");
   googleConsentModal?.classList.add("hidden");
+  if (inputGoogleEmail) inputGoogleEmail.value = "";
 }
 async function handleGoogleLogin(emailParam) {
   clientLog("info", "auth", "handleGoogleLogin triggered", { emailParam: emailParam || null });
@@ -2237,7 +2237,7 @@ async function handleGoogleLogin(emailParam) {
     email = inputEmail.value.trim();
   }
   if (!email) {
-    clientLog("info", "auth", "No pre-selected email; displaying Google Account Chooser modal");
+    clientLog("info", "auth", "No pre-selected email; displaying Google Sign-In modal");
     openGoogleConsentModal();
     return;
   }
@@ -2267,33 +2267,43 @@ async function handleGoogleLogin(emailParam) {
     }
   }
 }
-btnConfirmGoogleConsent?.addEventListener("click", () => {
-  clientLog("info", "auth_ui", 'Clicked "Continue as Carl" consent button');
-  handleGoogleLogin("cbellingan@gmail.com");
-});
-googleAccountCarl?.addEventListener("click", () => {
-  clientLog("info", "auth_ui", "Selected Carl Bellingan account card");
-  handleGoogleLogin("cbellingan@gmail.com");
-});
-btnUseAnotherGoogleAccount?.addEventListener("click", () => {
-  clientLog("info", "auth_ui", 'Selected "Use another account"');
-  googleAccountChooserView?.classList.add("hidden");
-  googleAnotherAccountView?.classList.remove("hidden");
-  inputAnotherGoogleEmail?.focus();
-});
-btnBackToGoogleChooser?.addEventListener("click", () => {
-  googleAnotherAccountView?.classList.add("hidden");
-  googleAccountChooserView?.classList.remove("hidden");
+formGoogleSignInModal?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const enteredEmail = inputGoogleEmail?.value.trim();
+  clientLog("info", "auth_ui", "Submitted Google Sign-In form", { email: enteredEmail });
+  if (enteredEmail) {
+    handleGoogleLogin(enteredEmail);
+  }
 });
 btnCancelGoogleConsent?.addEventListener("click", () => {
   closeGoogleConsentModal();
 });
-formAnotherGoogleAccount?.addEventListener("submit", (e) => {
+googleConsentModal?.addEventListener("click", (e) => {
+  if (e.target === googleConsentModal) {
+    closeGoogleConsentModal();
+  }
+});
+function openAboutModal() {
+  clientLog("info", "ui", "Opening About & Zero-Knowledge Architecture modal");
+  aboutModal?.classList.remove("hidden");
+}
+function closeAboutModal() {
+  clientLog("info", "ui", "Closing About modal");
+  aboutModal?.classList.add("hidden");
+}
+btnOpenAboutModal?.addEventListener("click", () => {
+  openAboutModal();
+});
+btnCloseAboutModal?.addEventListener("click", () => {
+  closeAboutModal();
+});
+linkAboutEncryptionLanding?.addEventListener("click", (e) => {
   e.preventDefault();
-  const enteredEmail = inputAnotherGoogleEmail?.value.trim();
-  clientLog("info", "auth_ui", "Submitted alternate Google account form", { email: enteredEmail });
-  if (enteredEmail) {
-    handleGoogleLogin(enteredEmail);
+  openAboutModal();
+});
+aboutModal?.addEventListener("click", (e) => {
+  if (e.target === aboutModal) {
+    closeAboutModal();
   }
 });
 formCredentialLogin?.addEventListener("submit", async (e) => {
@@ -2908,16 +2918,11 @@ async function refreshDashboard() {
 }
 window.addEventListener("DOMContentLoaded", async () => {
   clientLog("info", "lifecycle", "Application DOM loaded and initialized");
-  const urlParams = new URLSearchParams(window.location.search);
-  const autoAuth = urlParams.get("auto_auth");
-  if (autoAuth === "admin") {
-    clientLog("info", "lifecycle", "Auto-authenticating as admin");
-    await handleGoogleLogin("cbellingan@gmail.com");
-  } else if (sessionToken) {
+  if (sessionToken) {
     clientLog("info", "lifecycle", "Found existing session token, verifying with server");
     try {
       const res = await apiRequest("/api/auth/me");
-      if (res.status === "ok" && res.user && res.user.email === "cbellingan@gmail.com") {
+      if (res.status === "ok" && res.user && res.user.role === "admin") {
         clientLog("info", "lifecycle", "Session valid; unlocking dashboard");
         unlockDashboard(res.user, sessionToken);
       } else {

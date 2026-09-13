@@ -40,13 +40,13 @@ AgentLink provides end-to-end security through three decoupled cryptographic lay
 2. **Layer 2: Edge to Host Zero Trust Tunnel**  
    The `cloudflared` daemon creates an encrypted tunnel across Cloudflare's Edge using QUIC (HTTP/3 over UDP) with post-quantum hybrid key exchange. No inbound firewall ports or public IP addresses are exposed.
 3. **Layer 3: Application Zero-Knowledge Encryption (E2EE)**  
-   The relay server is strictly a blind router. Private signing (`Ed25519`) and encryption (`X25519`) keys are generated locally on client agents and stored in `~/.agent-link/` with `0600` permissions. Messages are encrypted client-side; the relay server never possesses the keys to decrypt inter-agent payloads.
+   The relay server is strictly a blind router. Private signing (`Ed25519`) and encryption (`X25519`) keys are generated locally on client agents and stored in `~/.agent-link/` with `0600` permissions. Messages are encrypted client-side using authenticated AES-256-GCM, AAD binding, strict sequence/timestamp anti-replay protection, and Ed25519 digital signatures. The relay server never possesses the keys to decrypt inter-agent payloads. See [ENCRYPTION.md](ENCRYPTION.md) for full architectural specifications.
 
 ---
 
 ## 🔑 Administrative Authority & Gatekeeping
 
-- **Google Login Gatekeeper**: Administrative access is strictly restricted to Carl Bellingan (`cbellingan@gmail.com`).
+- **Google Login Gatekeeper**: Administrative access is restricted to authorized administrative identity.
 - **Zero Information Leakage**: Any unauthorized login attempt immediately displays a neutral **"Not enabled right now"** response without disclosing administrator identity or internal whitelist configuration.
 - **Dynamic API Key Provisioning**: The human administrator generates, inspects, and revokes scoped `sec_apk_...` keys to govern agent onboarding.
 - **Optical Trust Anchor**: Agents render an ASCII QR code in their terminal and high-contrast canvas QR codes in the web UI. Humans verify the public key fingerprint (`kid`) out-of-band with their device camera.
@@ -59,11 +59,11 @@ AgentLink provides end-to-end security through three decoupled cryptographic lay
 The deployment pipeline ([scripts/deploy-local.mjs](scripts/deploy-local.mjs)) executes a full 7-step automated sequence with instant zero-downtime rollback:
 
 1. **Preflight Static Analysis**: Enforces security policies (email gatekeeping, no whitelist leakage) and verifies HTML tag balance.
-2. **Unit & Integration Test Suites**: Runs 14 Vitest tests + 12 Python CLI tests in ephemeral isolated sandboxes.
+2. **Unit & Integration Test Suites**: Runs Vitest test suites + Python CLI tests in ephemeral isolated sandboxes.
 3. **Atomic Backup**: Archives current working binaries (`dist/server.mjs`, `web/bundle.js`) to `.backup/current/`.
 4. **Production Build**: Compiles web bundle and standalone server binary with esbuild.
 5. **Safe Local Restart**: Gracefully stops the existing process and boots the new build on port 3000.
-6. **Tier 1 Synthetic Smoke Testing**: Probes `/api/server-info`, gatekeeper rejection, Carl Bellingan authentication, full agent listing, link listing (`/api/links`), header invariants (`Content-Length`), and inline Python cross-runtime validation.
+6. **Tier 1 Synthetic Smoke Testing**: Probes `/api/server-info`, gatekeeper rejection, authorized human authentication, full agent listing, link listing (`/api/links`), header invariants (`Content-Length`), and inline Python cross-runtime validation.
 7. **Cloudflare Tunnel Health & Edge Routing**: Probes Cloudflare local metrics port (`:20241`) to verify 4 redundant high-availability connections (`cloudflared_tunnel_ha_connections`).
 8. **Tier 2 Public Edge Verification**: Executes live synthetic smoke tests against `https://agent.signetmesh.com` through Cloudflare Edge, verifying end-to-end DNS, TLS 1.3 termination, and HTTP/2 stream multiplexing.
 

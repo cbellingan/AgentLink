@@ -12,13 +12,20 @@ console.log('🔒 ========================================================');
 console.log('🔒 Running Security Auditor for AgentLink');
 console.log('🔒 ========================================================');
 
-// 1. Audit public index.html
-const htmlPath = path.resolve('web/index.html');
-if (fs.existsSync(htmlPath)) {
-  const content = fs.readFileSync(htmlPath, 'utf8');
-  if (content.includes('Whitelist') || content.includes('whitelist')) {
-    console.error('❌ [ERROR] Public HTML contains the word "Whitelist"');
-    errors++;
+// 1. Audit public web assets for zero disclosure
+const webFiles = ['web/index.html', 'web/app.ts', 'web/bundle.js'];
+for (const relPath of webFiles) {
+  const fullPath = path.resolve(relPath);
+  if (fs.existsSync(fullPath)) {
+    const content = fs.readFileSync(fullPath, 'utf8');
+    if (content.includes('Whitelist') || content.includes('whitelist')) {
+      console.error(`❌ [ERROR] Public asset ${relPath} contains the word "Whitelist"`);
+      errors++;
+    }
+    if (content.includes('cbellingan')) {
+      console.error(`❌ [ERROR] Public asset ${relPath} discloses administrator email/identity ("cbellingan")`);
+      errors++;
+    }
   }
 }
 
@@ -42,7 +49,8 @@ if (errors > 0) {
 } else {
   console.log('✅ ALL SECURITY AUDIT CHECKS PASSED:');
   console.log('   ✓ Zero administrative whitelist disclosure on landing page');
-  console.log('   ✓ Strict "Not enabled right now" enforcement active for non-Carl emails');
+  console.log('   ✓ Zero disclosure of administrator email/identity in web frontend assets');
+  console.log('   ✓ Strict "Not enabled right now" enforcement active for non-admin accounts');
   console.log('   ✓ Zero-knowledge local key isolation enforced');
   process.exit(0);
 }

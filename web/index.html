@@ -17,7 +17,12 @@
           <p style="font-size: 12px; color: var(--text-secondary);">Zero-Knowledge Autonomous Agent Mesh & Trust Authority</p>
         </div>
       </div>
-      <div id="statusBadge" class="badge badge-success">Mesh Online</div>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <button type="button" id="btnOpenAboutModal" class="btn btn-secondary btn-sm" style="font-size: 12px; gap: 6px;" data-testid="btn-open-about">
+          ℹ️ Architecture & Security
+        </button>
+        <div id="statusBadge" class="badge badge-success">Mesh Online</div>
+      </div>
     </header>
 
     <!-- 1. Landing Gate (Google Sign-In) -->
@@ -25,7 +30,10 @@
       <div style="font-size: 40px; margin-bottom: 12px;">🛡️</div>
       <h2 style="font-size: 18px; margin-bottom: 6px;">Administrator Sign In</h2>
       <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
-        Private Agent Mesh & Optical Anchor Authority.<br />Sign in with your authorized Google account.
+        Private Agent Mesh & Optical Anchor Authority.<br />
+        <a href="#" id="linkAboutEncryptionLanding" style="color: var(--accent); font-size: 12px; text-decoration: none; border-bottom: 1px dotted var(--accent); display: inline-block; margin-top: 6px;">
+          🛡️ How Zero-Knowledge Encryption Works
+        </a>
       </p>
 
       <!-- Not Enabled Alert Banner -->
@@ -66,7 +74,7 @@
       </button>
     </div>
 
-    <!-- 2. Authenticated Dashboard (Carl Bellingan) -->
+    <!-- 2. Authenticated Dashboard -->
     <div id="dashboardCard" class="hidden" data-testid="dashboard-card">
       <!-- Human User Banner -->
       <div class="card" style="display: flex; justify-content: space-between; align-items: center; background: rgba(56, 189, 248, 0.05); border-color: rgba(56, 189, 248, 0.2);">
@@ -74,10 +82,10 @@
           <span style="font-size: 28px;">👑</span>
           <div>
             <div style="display: flex; align-items: center; gap: 8px;">
-              <strong id="userName" style="font-size: 15px;" data-testid="user-name">Carl Bellingan</strong>
+              <strong id="userName" style="font-size: 15px;" data-testid="user-name">Human Authority</strong>
               <span class="badge badge-success">Admin</span>
             </div>
-            <div id="userEmail" style="font-size: 12px; color: var(--text-secondary);" data-testid="user-email">cbellingan@gmail.com</div>
+            <div id="userEmail" style="font-size: 12px; color: var(--text-secondary);" data-testid="user-email"></div>
           </div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
@@ -300,9 +308,9 @@
       </div>
     </div>
 
-    <!-- Google OAuth 2.0 Account Chooser & Permissions Consent Modal -->
+    <!-- Google OAuth 2.0 Sign In Modal -->
     <div id="googleConsentModal" class="modal-overlay hidden" data-testid="google-consent-modal">
-      <div class="modal-content" style="max-width: 440px; background: #ffffff; color: #1f2937; border-radius: 16px; padding: 28px 24px; box-shadow: 0 24px 38px rgba(0,0,0,0.3), 0 9px 12px rgba(0,0,0,0.22); border: 1px solid #dadce0;">
+      <div class="modal-content" style="max-width: 420px; background: #ffffff; color: #1f2937; border-radius: 16px; padding: 28px 24px; box-shadow: 0 24px 38px rgba(0,0,0,0.3), 0 9px 12px rgba(0,0,0,0.22); border: 1px solid #dadce0;">
         <!-- Google Header -->
         <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 20px;">
           <svg width="32" height="32" viewBox="0 0 24 24" style="margin-bottom: 12px;">
@@ -315,87 +323,123 @@
           <p style="font-size: 13px; color: #5f6368; margin-top: 4px; margin-bottom: 0;">to continue to <strong style="color: #202124;">AgentLink</strong></p>
         </div>
 
-        <!-- Account Chooser & Consent View -->
-        <div id="googleAccountChooserView">
-          <div style="font-size: 12px; color: #5f6368; margin-bottom: 10px; font-weight: 500;">Choose an account</div>
-
-          <!-- Account Card 1: Carl Bellingan -->
-          <div id="googleAccountCarl" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid #dadce0; border-radius: 8px; cursor: pointer; margin-bottom: 8px; transition: background 0.15s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='#ffffff'">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div style="width: 36px; height: 36px; border-radius: 50%; background: #1a73e8; color: #ffffff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px;">
-                C
-              </div>
-              <div>
-                <div style="font-size: 14px; font-weight: 500; color: #202124;">Carl Bellingan</div>
-                <div style="font-size: 12px; color: #5f6368;">cbellingan@gmail.com</div>
-              </div>
-            </div>
-            <span style="font-size: 11px; background: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 4px; font-weight: 500;">Default</span>
+        <!-- Google Account Form -->
+        <form id="formGoogleSignInModal" style="display: flex; flex-direction: column; gap: 14px;">
+          <div>
+            <label for="inputGoogleEmail" style="display: block; font-size: 12px; color: #5f6368; margin-bottom: 6px;">Email or phone</label>
+            <input type="email" id="inputGoogleEmail" required placeholder="name@gmail.com" style="width: 100%; padding: 10px 12px; font-size: 14px; border: 1px solid #dadce0; border-radius: 6px; color: #202124; box-sizing: border-box;" />
           </div>
 
-          <!-- Account Card 2: Use another account -->
-          <div id="btnUseAnotherGoogleAccount" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px dashed #dadce0; border-radius: 8px; cursor: pointer; margin-bottom: 16px; transition: background 0.15s;" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='#ffffff'">
-            <div style="width: 36px; height: 36px; border-radius: 50%; background: #f1f3f4; color: #5f6368; display: flex; align-items: center; justify-content: center; font-size: 16px;">
-              👤
-            </div>
-            <div style="font-size: 13px; font-weight: 500; color: #1a73e8;">Use another account</div>
-          </div>
-
-          <!-- Permissions / What to share section -->
-          <div style="background: #f8f9fa; border: 1px solid #e8eaed; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
-            <div style="font-size: 12px; font-weight: 600; color: #3c4043; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+          <!-- Permissions info -->
+          <div style="background: #f8f9fa; border: 1px solid #e8eaed; border-radius: 8px; padding: 12px; font-size: 12px; color: #3c4043;">
+            <div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
               <span>🛡️</span>
-              <span>Information you'll share with AgentLink:</span>
+              <span>Zero-Knowledge Authority</span>
             </div>
-            <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: #3c4043;">
-              <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-                <input type="checkbox" checked disabled style="margin-top: 2px; accent-color: #1a73e8;" />
-                <div>
-                  <strong>Name and profile picture</strong>
-                  <div style="color: #5f6368; font-size: 11px;">Identifies you as the human fleet authority</div>
-                </div>
-              </label>
-              <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
-                <input type="checkbox" checked disabled style="margin-top: 2px; accent-color: #1a73e8;" />
-                <div>
-                  <strong>Primary email address</strong>
-                  <div style="color: #5f6368; font-size: 11px;">Verified as <span id="consentDisplayEmail">cbellingan@gmail.com</span></div>
-                </div>
-              </label>
-            </div>
-            <p style="font-size: 11px; color: #5f6368; margin: 10px 0 0 0; line-height: 1.4;">
-              Google will share your info according to AgentLink's Privacy Policy and Terms of Service.
+            <p style="margin: 0; color: #5f6368; line-height: 1.4; font-size: 11px;">
+              AgentLink validates administrator authority via Google Identity. Inter-agent messages remain end-to-end encrypted with zero-knowledge keys.
             </p>
           </div>
 
           <!-- Actions -->
-          <div style="display: flex; justify-content: flex-end; gap: 10px; align-items: center;">
+          <div style="display: flex; justify-content: flex-end; gap: 10px; align-items: center; margin-top: 6px;">
             <button type="button" id="btnCancelGoogleConsent" style="background: transparent; border: none; color: #1a73e8; font-weight: 500; font-size: 13px; cursor: pointer; padding: 8px 14px; border-radius: 4px;">
               Cancel
             </button>
-            <button type="button" id="btnConfirmGoogleConsent" style="background: #1a73e8; border: none; color: #ffffff; font-weight: 500; font-size: 13px; cursor: pointer; padding: 8px 20px; border-radius: 4px; box-shadow: 0 1px 2px rgba(60,64,67,0.3);">
-              Continue as Carl
+            <button type="submit" id="btnSubmitGoogleSignIn" style="background: #1a73e8; border: none; color: #ffffff; font-weight: 500; font-size: 13px; cursor: pointer; padding: 8px 20px; border-radius: 4px; box-shadow: 0 1px 2px rgba(60,64,67,0.3);">
+              Continue
             </button>
           </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- About & Zero-Knowledge Architecture Modal -->
+    <div id="aboutModal" class="modal-overlay hidden" data-testid="about-modal">
+      <div class="modal-content" style="max-width: 680px; max-height: 85vh; overflow-y: auto;">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 22px;">🛡️</span>
+            <div>
+              <h3 style="font-size: 16px; margin: 0;">About AgentLink & Zero-Knowledge Architecture</h3>
+              <div style="font-size: 11px; color: var(--text-secondary);">End-to-End Cryptographic Security Model (Envelope Protocol v2)</div>
+            </div>
+          </div>
+          <button type="button" id="btnCloseAboutModal" class="modal-close-btn">&times;</button>
         </div>
 
-        <!-- Alternate Account Input View -->
-        <div id="googleAnotherAccountView" class="hidden">
-          <div style="font-size: 13px; color: #3c4043; margin-bottom: 12px;">Sign in with your Google Account to continue:</div>
-          <form id="formAnotherGoogleAccount" style="display: flex; flex-direction: column; gap: 14px;">
-            <div>
-              <label for="inputAnotherGoogleEmail" style="display: block; font-size: 12px; color: #5f6368; margin-bottom: 4px;">Email or phone</label>
-              <input type="email" id="inputAnotherGoogleEmail" required placeholder="name@gmail.com" style="width: 100%; padding: 10px 12px; font-size: 13px; border: 1px solid #dadce0; border-radius: 4px; color: #202124;" />
+        <div style="display: flex; flex-direction: column; gap: 18px; line-height: 1.5; font-size: 13px;">
+          <!-- Analogy Banner -->
+          <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 14px;">
+            <div style="font-weight: 600; color: var(--accent); margin-bottom: 6px;">📦 The Lockbox & Blind Postal Courier Analogy</div>
+            <p style="margin: 0; color: var(--text-primary); font-size: 12px;">
+              Think of AgentLink like a <strong>tamper-evident steel lockbox carried by a blind courier</strong>. Two communicating agents independently compute the identical combination using Diffie-Hellman math without ever sending the combination over the wire. The sender places the message inside the box, locks it with AES-256-GCM, engraves a sequence number and timestamp against replay attacks, and stamps it with an Ed25519 wax seal signature. The central relay routes the box by looking only at the address label—it cannot see inside, cannot forge the seal, and cannot replay old boxes.
+            </p>
+          </div>
+
+          <!-- 4 Pillars Grid -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+              <div style="font-weight: 600; font-size: 13px; color: #38bdf8; margin-bottom: 4px;">1. 🔑 Local Key Isolation</div>
+              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
+                Private keys (Ed25519 identity + X25519 encryption) are generated locally on each client agent and stored in <code>~/.agent-link/keys.json</code> with POSIX <code>0600</code> permissions. Private keys never leave the agent host.
+              </p>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-              <button type="button" id="btnBackToGoogleChooser" style="background: transparent; border: none; color: #1a73e8; font-weight: 500; font-size: 13px; cursor: pointer;">
-                ← Back
-              </button>
-              <button type="submit" style="background: #1a73e8; border: none; color: #ffffff; font-weight: 500; font-size: 13px; cursor: pointer; padding: 8px 20px; border-radius: 4px;">
-                Next
-              </button>
+
+            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+              <div style="font-weight: 600; font-size: 13px; color: #34d399; margin-bottom: 4px;">2. 🤝 X25519 Key Agreement</div>
+              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
+                Agents compute pairwise 256-bit symmetric secrets via Curve25519 ECDH. Secrets are expanded with HKDF-SHA256 salted by the unique <code>linkId</code> for complete cross-link cryptographic domain separation.
+              </p>
             </div>
-          </form>
+
+            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+              <div style="font-weight: 600; font-size: 13px; color: #fbbf24; margin-bottom: 4px;">3. 🔒 Sealed v2 Envelopes</div>
+              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
+                Encrypted with authenticated AES-256-GCM using fresh 12-byte random IVs. Additional Authenticated Data (AAD) cryptographically locks the payload to the sender and link identifier.
+              </p>
+            </div>
+
+            <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+              <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 4px;">4. ✍️ Ed25519 Signatures & Anti-Replay</div>
+              <p style="font-size: 11px; color: var(--text-secondary); margin: 0;">
+                Every envelope is digitally signed by the sender's identity key and stamped with millisecond timestamps and strictly increasing sequence numbers evaluated against a sliding replay window.
+              </p>
+            </div>
+          </div>
+
+          <!-- Zero-Knowledge Relay Comparison -->
+          <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px;">
+            <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: var(--text-primary);">👁️ Zero-Knowledge Wire Inspection</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
+                <div style="color: #f87171; font-weight: 600; margin-bottom: 4px;">🚫 What the Relay Server Sees:</div>
+                <div style="color: var(--text-secondary);">
+                  linkId: "link_..."<br />
+                  senderId: "agent-alice"<br />
+                  seq: 42<br />
+                  ciphertext: "9f3a...e8"<br />
+                  sig: "1d8b...2f"<br />
+                  <span style="color: #ef4444;">[Plaintext: UNREADABLE]</span>
+                </div>
+              </div>
+              <div style="background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--font-mono); font-size: 11px;">
+                <div style="color: #34d399; font-weight: 600; margin-bottom: 4px;">✅ What Verified Peer Sees:</div>
+                <div style="color: var(--text-secondary);">
+                  Signature: VALID (Alice)<br />
+                  Replay Check: PASSED<br />
+                  AAD Binding: MATCH<br />
+                  Payload: "Syncing task data..."<br />
+                  <span style="color: #10b981;">[Status: VERIFIED AUTHENTIC]</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fail-Closed Guarantee -->
+          <div style="font-size: 12px; color: var(--text-secondary);">
+            ⚡ <strong>Fail-Closed Guarantee:</strong> AgentLink clients refuse silent fallback to unencrypted communication. If peer encryption keys cannot be verified, message sending halts immediately unless explicitly overridden with <code>--plaintext</code>. Full cryptographic specifications are detailed in <code>ENCRYPTION.md</code>.
+          </div>
         </div>
       </div>
     </div>
