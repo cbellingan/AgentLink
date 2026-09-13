@@ -1409,20 +1409,43 @@ export class AgentLinkServer {
 
     const bugResolveMatch = parsedUrl.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
     if (req.method === 'POST' && bugResolveMatch) {
-      const bugId = bugResolveMatch[1];
-      const bug = this.bugReports.find(b => b.id === bugId);
-      if (!bug) {
-        this.sendJson(res, 404, { error: 'not_found', message: 'Bug report not found' });
-        return;
-      }
-      bug.resolved = true;
-      try {
-        // Rewrite bug log with updated resolved states
-        fs.writeFileSync(this.bugLogPath, this.bugReports.map(b => JSON.stringify(b)).join('\n') + '\n', 'utf8');
-      } catch (err) {
-        console.error('[BUG-LOG ERROR] Failed to sync bug resolution:', err);
-      }
-      this.sendJson(res, 200, { status: 'ok', bug });
+      readJson((body) => {
+        const bugId = bugResolveMatch[1];
+        const bug = this.bugReports.find(b => b.id === bugId);
+        if (!bug) {
+          this.sendJson(res, 404, { error: 'not_found', message: 'Bug report not found' });
+          return;
+        }
+
+        const human = this.getAuthenticatedHuman(req);
+        const token = this.extractToken(req);
+        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const resolver = human ? (human.name || human.email) : (body.resolvedBy || body.agentId || (apiKeyRecord ? apiKeyRecord.id : 'Administrator'));
+
+        const shouldResolve = body.resolved !== undefined ? Boolean(body.resolved) : true;
+        bug.resolved = shouldResolve;
+        if (shouldResolve) {
+          bug.resolvedAt = new Date().toISOString();
+          bug.resolvedBy = resolver;
+          if (body.note || body.resolutionNote) {
+            bug.resolutionNote = body.note || body.resolutionNote;
+          }
+        } else {
+          bug.resolvedAt = undefined;
+          bug.resolvedBy = undefined;
+          bug.resolutionNote = undefined;
+        }
+
+        try {
+          // Rewrite bug log with updated resolved states
+          fs.writeFileSync(this.bugLogPath, this.bugReports.map(b => JSON.stringify(b)).join('\n') + '\n', 'utf8');
+        } catch (err) {
+          console.error('[BUG-LOG ERROR] Failed to sync bug resolution:', err);
+        }
+
+        console.log(`[BUG REPORT ${shouldResolve ? 'RESOLVED' : 'REOPENED'}] ${bug.id} by ${resolver}`);
+        this.sendJson(res, 200, { status: 'ok', bug });
+      });
       return;
     }
 

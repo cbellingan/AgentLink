@@ -3128,8 +3128,120 @@ ${lastInviteEmailTemplate.body}`;
     }, 2e3);
   }
 });
+var bugFilter = "open";
+var cachedBugs = [];
+async function refreshBugReports() {
+  try {
+    const res = await apiRequest("/api/bugs?limit=100");
+    cachedBugs = res.bugs || [];
+    renderBugReports();
+  } catch (err) {
+    console.error("Failed to refresh bug reports:", err);
+  }
+}
+function renderBugReports() {
+  const container = document.getElementById("bugsListContainer");
+  const badge = document.getElementById("bugCountBadge");
+  if (!container || !badge) return;
+  const openBugs = cachedBugs.filter((b) => !b.resolved);
+  badge.textContent = `${openBugs.length} Open`;
+  badge.className = openBugs.length > 0 ? "badge badge-warning" : "badge badge-success";
+  let filtered = cachedBugs;
+  if (bugFilter === "open") {
+    filtered = openBugs;
+  } else if (bugFilter === "resolved") {
+    filtered = cachedBugs.filter((b) => b.resolved);
+  }
+  filtered = [...filtered].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  if (filtered.length === 0) {
+    container.innerHTML = `<div style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 13px;">
+      ${bugFilter === "open" ? "\u{1F389} No open bug reports! All systems operational." : "No bug reports found."}
+    </div>`;
+    return;
+  }
+  container.innerHTML = filtered.map((b) => {
+    const sevColors = {
+      critical: "#ef4444",
+      high: "#f97316",
+      medium: "#eab308",
+      low: "#3b82f6"
+    };
+    const sevColor = sevColors[b.severity] || "#eab308";
+    const statusBadge = b.resolved ? `<span class="badge badge-success" style="font-size: 10px;">\u2705 Resolved</span>` : `<span class="badge badge-danger" style="font-size: 10px; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid #ef4444;">\u{1F534} Open</span>`;
+    const sevBadge = `<span style="font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: ${sevColor}22; color: ${sevColor}; border: 1px solid ${sevColor}; text-transform: uppercase;">${b.severity || "medium"}</span>`;
+    const timeStr = new Date(b.timestamp).toLocaleString();
+    const resolvedMeta = b.resolved ? `<div style="font-size: 11px; color: #34d399; margin-top: 6px; background: rgba(16, 185, 129, 0.08); padding: 4px 8px; border-radius: 4px;">
+           \u2713 Resolved by <strong>${escapeHtml(b.resolvedBy || "Administrator")}</strong>${b.resolvedAt ? ` on ${new Date(b.resolvedAt).toLocaleString()}` : ""}
+           ${b.resolutionNote ? `<br><em>Fix Note: ${escapeHtml(b.resolutionNote)}</em>` : ""}
+         </div>` : "";
+    return `
+      <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              ${statusBadge}
+              ${sevBadge}
+              <strong style="font-size: 13px; color: var(--text-primary);">${escapeHtml(b.title)}</strong>
+            </div>
+            <div style="font-size: 11px; color: var(--text-secondary); display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+              <span>\u{1F916} Agent: <strong style="font-family: var(--font-mono); color: var(--accent);">${escapeHtml(b.agentId || "anonymous")}</strong></span>
+              <span>\u{1F552} ${timeStr}</span>
+              <span style="font-family: var(--font-mono); font-size: 10px;">ID: ${escapeHtml(b.id)}</span>
+            </div>
+          </div>
+          <div>
+            ${b.resolved ? `<button type="button" class="btn btn-secondary btn-sm" onclick="window.toggleResolveBug('${b.id}', false)" style="font-size: 11px; padding: 4px 8px;">\u21A9 Reopen</button>` : `<button type="button" class="btn btn-sm" onclick="window.toggleResolveBug('${b.id}', true)" style="font-size: 11px; padding: 4px 10px; background: #10b981; border-color: #059669; color: #fff;">\u2713 Mark as Resolved</button>`}
+          </div>
+        </div>
+        <div style="font-size: 12px; background: var(--bg-primary); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--border); font-family: var(--font-mono); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;">${escapeHtml(b.details)}</div>
+        ${resolvedMeta}
+      </div>
+    `;
+  }).join("");
+}
+window.toggleResolveBug = async (bugId, resolve) => {
+  let note = null;
+  if (resolve) {
+    note = prompt("Enter an optional resolution note or fix commit reference:") || null;
+  }
+  try {
+    await apiRequest(`/api/bugs/${encodeURIComponent(bugId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolved: resolve, note })
+    });
+    await refreshBugReports();
+  } catch (err) {
+    alert(`Failed to update bug report: ${err.message}`);
+  }
+};
+var btnRefreshBugs = document.getElementById("btnRefreshBugs");
+var btnBugFilterOpen = document.getElementById("btnBugFilterOpen");
+var btnBugFilterAll = document.getElementById("btnBugFilterAll");
+var btnBugFilterResolved = document.getElementById("btnBugFilterResolved");
+btnRefreshBugs?.addEventListener("click", () => refreshBugReports());
+btnBugFilterOpen?.addEventListener("click", () => {
+  bugFilter = "open";
+  if (btnBugFilterOpen) btnBugFilterOpen.className = "btn btn-sm";
+  if (btnBugFilterAll) btnBugFilterAll.className = "btn btn-secondary btn-sm";
+  if (btnBugFilterResolved) btnBugFilterResolved.className = "btn btn-secondary btn-sm";
+  renderBugReports();
+});
+btnBugFilterAll?.addEventListener("click", () => {
+  bugFilter = "all";
+  if (btnBugFilterAll) btnBugFilterAll.className = "btn btn-sm";
+  if (btnBugFilterOpen) btnBugFilterOpen.className = "btn btn-secondary btn-sm";
+  if (btnBugFilterResolved) btnBugFilterResolved.className = "btn btn-secondary btn-sm";
+  renderBugReports();
+});
+btnBugFilterResolved?.addEventListener("click", () => {
+  bugFilter = "resolved";
+  if (btnBugFilterResolved) btnBugFilterResolved.className = "btn btn-sm";
+  if (btnBugFilterOpen) btnBugFilterOpen.className = "btn btn-secondary btn-sm";
+  if (btnBugFilterAll) btnBugFilterAll.className = "btn btn-secondary btn-sm";
+  renderBugReports();
+});
 async function refreshDashboard() {
-  await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks()]);
+  await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshPeerLinks(), refreshBugReports()]);
 }
 window.addEventListener("DOMContentLoaded", async () => {
   clientLog("info", "lifecycle", "Application DOM loaded and initialized");

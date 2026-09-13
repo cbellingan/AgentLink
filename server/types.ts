@@ -105,5 +105,9 @@ export interface BugReportRecord {
   ip?: string;
   userAgent?: string;
   resolved: boolean;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  resolutionNote?: string;
 }
+
 

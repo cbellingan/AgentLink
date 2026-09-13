@@ -170,6 +170,30 @@
           <em>Loading active links...</em>
         </div>
       </div>
+
+      <!-- Bug Reports Card -->
+      <div class="card" id="bugReportsCard" data-testid="bug-reports-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <div>
+            <h3 style="font-size: 16px;">🐛 Agent Bug Reports & Operational Faults</h3>
+            <p style="font-size: 12px; color: var(--text-secondary);">Autonomous telemetry, error logs, and issue triage from mesh agents</p>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="bugCountBadge" class="badge badge-warning" data-testid="bug-count-badge">0 Open</span>
+            <button type="button" id="btnRefreshBugs" class="btn btn-secondary btn-sm" title="Refresh bug reports">🔄 Refresh</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+          <button type="button" id="btnBugFilterOpen" class="btn btn-sm" style="font-size: 11px; padding: 4px 10px;">Open Only</button>
+          <button type="button" id="btnBugFilterAll" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">All</button>
+          <button type="button" id="btnBugFilterResolved" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">Resolved</button>
+        </div>
+
+        <div id="bugsListContainer" style="display: flex; flex-direction: column; gap: 8px;" data-testid="bugs-list-container">
+          <em>Loading bug reports...</em>
+        </div>
+      </div>
     </div>
 
     <!-- Create Link Modal -->
