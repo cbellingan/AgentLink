@@ -245,17 +245,37 @@ received_frame = messages[0]
 assert received_frame["senderId"] == "agent-alice"
 assert received_frame["linkId"] == "${linkId}"
 
-# Bob decrypts payload using his private key and Alice's public key
+# Bob verifies signature and decrypts payload using open_envelope
 payload = received_frame["payload"]
-decrypted_bytes = bob_kp.decrypt(
+assert payload.get("v") == 2, f"Expected v2 envelope, got {payload}"
+assert "sig" in payload, "Missing Ed25519 signature in envelope"
+assert "nonce" in payload, "Missing nonce in envelope"
+
+decrypted_text = bob_kp.open_envelope(
+    link_id='${linkId}',
+    peer_sign_pub_b64=alice_kp.sign_pub_b64,
     peer_enc_pub_b64=alice_kp.enc_pub_b64,
-    iv_b64=payload["iv"],
-    data_b64=payload["data"],
+    envelope=payload,
 )
-decrypted_json = json.loads(decrypted_bytes.decode("utf-8"))
+decrypted_json = json.loads(decrypted_text)
 
 assert decrypted_json["challenge"] == "alice_challenges_bob_092026"
 assert decrypted_json["command"] == "verify_peer_handshake"
+
+# Verify failure mode: tampered signature is rejected
+tampered_payload = dict(payload)
+tampered_payload["sig"] = "A" * len(payload["sig"])
+try:
+    bob_kp.open_envelope(
+        link_id='${linkId}',
+        peer_sign_pub_b64=alice_kp.sign_pub_b64,
+        peer_enc_pub_b64=alice_kp.enc_pub_b64,
+        envelope=tampered_payload,
+    )
+    assert False, "Should have rejected tampered signature"
+except Exception as e:
+    assert "signature" in str(e).lower(), f"Unexpected error: {e}"
+
 print("E2EE_VERIFICATION_SUCCESS")
 `;
 

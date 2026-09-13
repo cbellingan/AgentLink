@@ -916,9 +916,11 @@ export class AgentLinkServer {
             link.framesCount = (link.framesCount || 0) + 1;
             if (!link.recentMessages) link.recentMessages = [];
             const isEnc = typeof body.payload === 'object' && body.payload !== null && Boolean(body.payload.data);
+            const isSigned = isEnc && Boolean(body.payload.sig);
+            const seq = isEnc && typeof body.payload.seq === 'number' ? body.payload.seq : undefined;
             const previewText = typeof body.payload === 'string' 
               ? body.payload 
-              : (isEnc ? `[E2EE ${body.payload.data.slice(0, 16)}...]` : '[E2EE Encrypted Payload]');
+              : (isEnc ? `[E2EE v${body.payload.v || 1}${seq ? ` #${seq}` : ''} ${body.payload.data.slice(0, 12)}...]` : '[E2EE Encrypted Payload]');
             link.recentMessages.push({
               id: `msg_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
               timestamp: new Date().toISOString(),
@@ -926,6 +928,8 @@ export class AgentLinkServer {
               targetId,
               text: previewText,
               isEncrypted: isEnc,
+              isSigned,
+              seq,
               payload: body.payload,
             });
             if (link.recentMessages.length > 100) link.recentMessages.shift();

@@ -750,12 +750,12 @@ async function refreshConversationFlow(linkId: string, autoScroll: boolean = tru
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
               ${m.isEncrypted ? `
-                <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 9px; padding: 1px 5px;">
-                  🔒 E2EE Frame
+                <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 9px; padding: 1px 5px; font-weight: 600;">
+                  🔒 ${m.isSigned ? 'E2EE Signed (v2)' : 'E2EE Frame'}
                 </span>
               ` : `
-                <span class="badge" style="background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); font-size: 9px; padding: 1px 5px;">
-                  Plaintext
+                <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; font-size: 9px; padding: 1px 5px; font-weight: 600;">
+                  ⚠️ Plaintext (Insecure)
                 </span>
               `}
               <span style="font-size: 10px; color: var(--text-secondary);">${new Date(m.timestamp).toLocaleTimeString()}</span>
