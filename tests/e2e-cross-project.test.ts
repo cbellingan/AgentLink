@@ -6,9 +6,34 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const TEST_ADMIN_EMAIL = 'admin@mesh.local';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CLI_DIR = process.env.AGENT_LINK_CLI_DIR ||
+  (fs.existsSync(path.resolve(__dirname, '../../agent-link-cli'))
+    ? path.resolve(__dirname, '../../agent-link-cli')
+    : path.resolve(process.cwd(), '../agent-link-cli'));
+
+async function runCli(args: string[], options: any = {}) {
+  const env = { ...process.env, PYTHONPATH: `${CLI_DIR}:${process.env.PYTHONPATH || ''}`, ...options.env };
+  try {
+    return await execFileAsync('agent-link', args, { ...options, env });
+  } catch (err: any) {
+    if (err && err.code === 'ENOENT') {
+      return await execFileAsync('python3', ['-m', 'agent_link.cli', ...args], { ...options, env, cwd: CLI_DIR });
+    }
+    throw err;
+  }
+}
+
+function runPython(args: string[], options: any = {}) {
+  const env = { ...process.env, PYTHONPATH: `${CLI_DIR}:${process.env.PYTHONPATH || ''}`, ...options.env };
+  return execFileAsync('python3', args, { ...options, env });
+}
 
 describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-link-cli)', () => {
   let server: AgentLinkServer;
@@ -96,7 +121,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
 
   it('Step 3: CLI generates Ed25519/X25519 keypair and renders ASCII QR Code', async () => {
     const aliceKeyDir = path.join(tempDir, 'alice_keys');
-    const { stdout } = await execFileAsync('agent-link', [
+    const { stdout } = await runCli([
       'keygen',
       '--agent-id', 'agent-alice',
       '--key-dir', aliceKeyDir,
@@ -127,7 +152,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
 
   it('Step 4: CLI registers Agent Alice with AgentLink server using the provisioned API Key', async () => {
     const aliceKeyDir = path.join(tempDir, 'alice_keys');
-    const { stdout } = await execFileAsync('agent-link', [
+    const { stdout } = await runCli([
       'register',
       '--agent-id', 'agent-alice',
       '--api-key', apiKeyAlice,
@@ -149,7 +174,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
 
   it('Step 5: CLI registers Agent Bob with AgentLink server using provisioned API key', async () => {
     const bobKeyDir = path.join(tempDir, 'bob_keys');
-    const { stdout } = await execFileAsync('agent-link', [
+    const { stdout } = await runCli([
       'register',
       '--agent-id', 'agent-bob',
       '--api-key', apiKeyBob,
@@ -168,7 +193,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
 
   it('Step 6: CLI status command reports active registration', async () => {
     const aliceKeyDir = path.join(tempDir, 'alice_keys');
-    const { stdout } = await execFileAsync('agent-link', [
+    const { stdout } = await runCli([
       'status',
       '--agent-id', 'agent-alice',
       '--key-dir', aliceKeyDir,
@@ -282,7 +307,7 @@ except Exception as e:
 print("E2EE_VERIFICATION_SUCCESS")
 `;
 
-    const { stdout } = await execFileAsync('python3', ['-c', testScript]);
+    const { stdout } = await runPython(['-c', testScript]);
     expect(stdout).toContain("E2EE_VERIFICATION_SUCCESS");
   });
 
@@ -336,13 +361,13 @@ assert "encPub" in bob_agent
 print("PYTHON_LIST_AND_HEADERS_OK")
 `;
 
-    const { stdout } = await execFileAsync('python3', ['-c', listTestScript]);
+    const { stdout } = await runPython(['-c', listTestScript]);
     expect(stdout).toContain("PYTHON_LIST_AND_HEADERS_OK");
   });
 
   it('Step 8: Skill file validation for autonomous agents', () => {
     // Check that SKILL.md exists in CLI repo and specifies clear protocol
-    const cliSkillPath = '/Users/cb/Documents/antigravity/agent-link-cli/SKILL.md';
+    const cliSkillPath = path.join(CLI_DIR, 'SKILL.md');
     expect(fs.existsSync(cliSkillPath)).toBe(true);
     const skillContent = fs.readFileSync(cliSkillPath, 'utf8');
 
@@ -356,10 +381,10 @@ print("PYTHON_LIST_AND_HEADERS_OK")
   });
 
   it('Step 9: Autonomous bug report submission via CLI subprocess to server', async () => {
-    const cliPath = '/Users/cb/Documents/antigravity/agent-link-cli';
+    const cliPath = CLI_DIR;
     const aliceKeysDir = path.join(tempDir, 'alice_keys');
 
-    const { stdout } = await execFileAsync('python3', [
+    const { stdout } = await runPython([
       '-m', 'agent_link.cli',
       'bug-report',
       '--title', 'E2E Cross-Project Test Anomaly Report',

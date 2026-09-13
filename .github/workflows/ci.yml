@@ -57,7 +57,9 @@ jobs:
       - name: Install Python CLI dependencies
         run: |
           cd agent-link-cli
+          pip install --upgrade pip hatchling
           pip install cryptography qrcode
+          pip install -e .
 
       - name: Run Python CLI Unit Tests
         run: |

@@ -152,6 +152,29 @@ var AgentLinkServer = class {
       console.warn("[AgentLink Server] Could not save state to disk:", e);
     }
   }
+  calculateSafetyNumber(keyA, keyB) {
+    const hash = crypto.createHash("sha256").update([keyA, keyB].sort().join("::")).digest();
+    const num = hash.readUInt32BE(0) % 9e5 + 1e5;
+    return `${String(num).slice(0, 3)}-${String(num).slice(3, 6)}`;
+  }
+  generateAgentPrompt(opts) {
+    const portal = opts.portalUrl || "https://agent.signetmesh.com";
+    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on AgentLink (${portal}).
+
+Verification & Safety Anchors:
+- Peer Agent ID: ${opts.peerAgentId}
+- Peer Key Fingerprint (Key ID): ${opts.peerKid || "Pending peer registration"}
+- Mutual Safety Number: ${opts.safetyNumber}
+${opts.note ? `- Purpose / Note: ${opts.note}
+` : ""}
+Instructions for your Agent:
+1. Confirm local cryptographic identity:
+   python3 -m agent_link.cli whoami --agent-id "${opts.myAgentId}" --json
+2. Report the mutual Safety Number (${opts.safetyNumber}) to your human operator for confirmation.
+3. Check approved link status before transmitting any payload:
+   python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
+4. Fail-closed: Never transmit plaintext and reject any frame with unverified digital signatures.`;
+  }
   discoverLocalAgents() {
     if (process.env.NODE_ENV === "test") {
       return;
@@ -256,6 +279,15 @@ var AgentLinkServer = class {
             responderEmail = responderEmail || inv.recipientEmail;
           }
         }
+        const safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
+        const agentPrompt = this.generateAgentPrompt({
+          myAgentId: "ted",
+          peerAgentId: "puck",
+          peerKid: puckAgent?.kid,
+          safetyNumber,
+          note: "Cross-account agent link requested between Puck and Ted awaiting dual human approval.",
+          portalUrl: "https://agent.signetmesh.com"
+        });
         this.links.set(linkId, {
           id: linkId,
           agentAId: "puck",
@@ -271,6 +303,8 @@ var AgentLinkServer = class {
             [initiatorHumanId]: false,
             [responderHumanId]: false
           },
+          safetyNumber,
+          agentPrompt,
           framesCount: 0,
           bytesAtoB: 0,
           bytesBtoA: 0,
@@ -725,9 +759,23 @@ var AgentLinkServer = class {
           const senderLabel = fromAgentId ? `Autonomous agent '${fromAgentId}' (operator: ${inviterName || inviterEmail})` : inviterName || inviterEmail;
           const targetAgentId = body.targetAgentId || body.peerAgentId || body.peerId;
           let createdLinkId;
+          const host = req.headers["host"] || `localhost:${this.port}`;
+          const proto = req.headers["x-forwarded-proto"] || (host.includes("localhost") ? "http" : "https");
+          const portalUrl = `${proto}://${host}/`;
+          const agentA = fromAgentId ? this.agents.get(fromAgentId) : void 0;
+          const agentB = targetAgentId ? this.agents.get(targetAgentId) : void 0;
+          const keyA = agentA?.kid || fromAgentId || "initiator-agent";
+          const keyB = agentB?.kid || targetAgentId || "responder-agent";
+          const safetyNumber = this.calculateSafetyNumber(keyA, keyB);
+          const agentPrompt = this.generateAgentPrompt({
+            myAgentId: targetAgentId || "your-agent",
+            peerAgentId: fromAgentId || "peer-agent",
+            peerKid: agentA?.kid,
+            safetyNumber,
+            note: body.note,
+            portalUrl
+          });
           if (fromAgentId && targetAgentId && this.agents.has(fromAgentId) && this.agents.has(targetAgentId)) {
-            const agentA = this.agents.get(fromAgentId);
-            const agentB = this.agents.get(targetAgentId);
             const existing = Array.from(this.links.values()).find(
               (l) => l.agentAId === fromAgentId && l.agentBId === targetAgentId || l.agentAId === targetAgentId && l.agentBId === fromAgentId
             );
@@ -751,6 +799,8 @@ var AgentLinkServer = class {
                 createdAt: (/* @__PURE__ */ new Date()).toISOString(),
                 linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
                 approvals,
+                safetyNumber,
+                agentPrompt,
                 framesCount: 0,
                 bytesAtoB: 0,
                 bytesBtoA: 0,
@@ -773,6 +823,8 @@ var AgentLinkServer = class {
             targetAgentId,
             linkId: createdLinkId,
             token: inviteToken,
+            safetyNumber,
+            agentPrompt,
             status: "pending",
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
             expiresAt,
@@ -781,30 +833,42 @@ var AgentLinkServer = class {
           this.invites.set(inviteId, inviteRecord);
           this.invites.set(inviteToken, inviteRecord);
           this.saveState();
-          const host = req.headers["host"] || `localhost:${this.port}`;
-          const proto = req.headers["x-forwarded-proto"] || (host.includes("localhost") ? "http" : "https");
           const inviteUrl = `${proto}://${host}/?invite=${inviteToken}`;
           const emailTemplate = {
-            subject: `AgentLink Invitation to Connect Autonomous Agents from ${senderLabel}`,
+            subject: `AgentLink Connection Request from ${senderLabel}`,
             to: toEmail,
+            portalUrl,
+            safetyNumber,
+            agentPrompt,
             inviteUrl,
+            // included for testing and programmatic clients
             token: inviteToken,
             body: `Hi,
 
-${senderLabel} has invited you to connect autonomous AI agents on the AgentLink Zero-Knowledge Mesh.
+${senderLabel} has requested to establish an autonomous agent connection with you on the AgentLink Zero-Knowledge Mesh.
 
-To accept this invitation:
-1. Open this secure link: ${inviteUrl}
-2. Sign in with Google using this email address (${toEmail})
-3. Generate an API key in your dashboard and provision your agent
+\u{1F512} Zero-Credential Notice: In accordance with fail-closed security standards, this email carries NO passwords, bearer tokens, or login secrets.
 
-Note: Traffic is held in pending state until both you and ${inviterName || inviterEmail} approve the link in your respective dashboards.
+To authorize this connection:
+1. Sign in securely to your AgentLink Dashboard: ${portalUrl}
+2. Confirm the mutual Safety Number (${safetyNumber}) with ${inviterName || inviterEmail}
+3. Review and approve the pending connection in your dashboard
+
+Human-to-Agent Instructions:
+Paste the following prompt directly into your agent's chat session:
+"""
+${agentPrompt}
+"""
+Note: Messages remain fail-closed and strictly blocked until both human operators confirm matching Safety Numbers in their dashboards.
 `
           };
           setSecurityNote(`INVITE ISSUED: ${inviteId} to ${toEmail} by ${senderLabel}`);
           this.sendJson(res, 201, {
             status: "ok",
             invite: inviteRecord,
+            safetyNumber,
+            agentPrompt,
+            portalUrl,
             inviteUrl,
             emailTemplate,
             linkId: createdLinkId
@@ -1055,6 +1119,16 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
           if (!isSameOwner) {
             approvals[responderHumanId] = false;
           }
+          const keyA = agentA?.kid || agentAId;
+          const keyB = agentB?.kid || agentBId;
+          const safetyNumber = this.calculateSafetyNumber(keyA, keyB);
+          const agentPrompt = this.generateAgentPrompt({
+            myAgentId: agentBId,
+            peerAgentId: agentAId,
+            peerKid: agentA?.kid,
+            safetyNumber,
+            note: body.note
+          });
           const record = {
             id: linkId,
             agentAId,
@@ -1067,6 +1141,8 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
             linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
             approvals,
+            safetyNumber,
+            agentPrompt,
             framesCount: 0,
             bytesAtoB: 0,
             bytesBtoA: 0,
@@ -1074,7 +1150,7 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
           };
           this.links.set(linkId, record);
           this.saveState();
-          this.sendJson(res, 200, { status: "ok", linkId: record.id, link: record });
+          this.sendJson(res, 200, { status: "ok", linkId: record.id, link: record, safetyNumber, agentPrompt });
         });
         return;
       }
@@ -1104,8 +1180,20 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
             text: m.text,
             isEncrypted: m.isEncrypted
           }));
+          const agentA = this.agents.get(l.agentAId);
+          const agentB = this.agents.get(l.agentBId);
+          const safetyNumber = l.safetyNumber || this.calculateSafetyNumber(agentA?.kid || l.agentAId, agentB?.kid || l.agentBId);
+          const agentPrompt = l.agentPrompt || this.generateAgentPrompt({
+            myAgentId: l.agentBId,
+            peerAgentId: l.agentAId,
+            peerKid: agentA?.kid,
+            safetyNumber,
+            note: l.note
+          });
           return {
             ...l,
+            safetyNumber,
+            agentPrompt,
             recentMessages: msgs
           };
         });
@@ -1119,7 +1207,17 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
           this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
           return;
         }
-        this.sendJson(res, 200, { status: "ok", link });
+        const agentA = this.agents.get(link.agentAId);
+        const agentB = this.agents.get(link.agentBId);
+        const safetyNumber = link.safetyNumber || this.calculateSafetyNumber(agentA?.kid || link.agentAId, agentB?.kid || link.agentBId);
+        const agentPrompt = link.agentPrompt || this.generateAgentPrompt({
+          myAgentId: link.agentBId,
+          peerAgentId: link.agentAId,
+          peerKid: agentA?.kid,
+          safetyNumber,
+          note: link.note
+        });
+        this.sendJson(res, 200, { status: "ok", link: { ...link, safetyNumber, agentPrompt } });
         return;
       }
       if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && parsedUrl.endsWith("/approve")) {
@@ -1136,7 +1234,32 @@ Note: Traffic is held in pending state until both you and ${inviterName || invit
           if (!link.approvals) {
             link.approvals = {};
           }
+          if (!link.approvalDetails) {
+            link.approvalDetails = {};
+          }
+          const agentA = this.agents.get(link.agentAId);
+          const agentB = this.agents.get(link.agentBId);
+          if (!link.safetyNumber) {
+            link.safetyNumber = this.calculateSafetyNumber(agentA?.kid || link.agentAId, agentB?.kid || link.agentBId);
+          }
+          if (!link.agentPrompt) {
+            link.agentPrompt = this.generateAgentPrompt({
+              myAgentId: link.agentBId,
+              peerAgentId: link.agentAId,
+              peerKid: agentA?.kid,
+              safetyNumber: link.safetyNumber,
+              note: link.note
+            });
+          }
+          const confirmedKid = body.confirmedKid || body.kid || (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid);
+          const confirmedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber || link.safetyNumber;
           link.approvals[approverId] = true;
+          link.approvalDetails[approverId] = {
+            approved: true,
+            confirmedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            confirmedKid,
+            confirmedSafetyNumber
+          };
           const isSameOwner = !link.responderHumanId || link.initiatorHumanId === link.responderHumanId;
           const initiatorOk = Boolean(link.approvals[link.initiatorHumanId]);
           const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId]);

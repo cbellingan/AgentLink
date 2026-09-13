@@ -6,9 +6,34 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const TEST_ADMIN_EMAIL = 'admin@mesh.local';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CLI_DIR = process.env.AGENT_LINK_CLI_DIR ||
+  (fs.existsSync(path.resolve(__dirname, '../../agent-link-cli'))
+    ? path.resolve(__dirname, '../../agent-link-cli')
+    : path.resolve(process.cwd(), '../agent-link-cli'));
+
+async function runCli(args: string[], options: any = {}) {
+  const env = { ...process.env, PYTHONPATH: `${CLI_DIR}:${process.env.PYTHONPATH || ''}`, ...options.env };
+  try {
+    return await execFileAsync('agent-link', args, { ...options, env });
+  } catch (err: any) {
+    if (err && err.code === 'ENOENT') {
+      return await execFileAsync('python3', ['-m', 'agent_link.cli', ...args], { ...options, env, cwd: CLI_DIR });
+    }
+    throw err;
+  }
+}
+
+function runPython(args: string[], options: any = {}) {
+  const env = { ...process.env, PYTHONPATH: `${CLI_DIR}:${process.env.PYTHONPATH || ''}`, ...options.env };
+  return execFileAsync('python3', args, { ...options, env });
+}
 
 describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
   let server: AgentLinkServer;
@@ -52,7 +77,7 @@ describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
 
       // Register agent via CLI
       const agentKeyDir = path.join(tempDir, agentId);
-      await execFileAsync('agent-link', [
+      await runCli([
         'register',
         '--agent-id', agentId,
         '--api-key', apiKeys[agentId],
@@ -157,7 +182,7 @@ dave_text = dave_kp.open_envelope(
 assert dave_text == 'Charlie to Dave secret message'
 print('DUAL_PARALLEL_E2EE_OK')
 `;
-    const { stdout } = await execFileAsync('python3', ['-c', pythonMeshScript]);
+    const { stdout } = await runPython(['-c', pythonMeshScript]);
     expect(stdout).toContain('DUAL_PARALLEL_E2EE_OK');
   });
 
@@ -193,7 +218,7 @@ except Exception as e:
     assert 'signature' in str(e).lower() or 'failed' in str(e).lower()
     print('TRANSPOSITION_REJECTION_OK')
 `;
-    const { stdout } = await execFileAsync('python3', ['-c', transpositionScript]);
+    const { stdout } = await runPython(['-c', transpositionScript]);
     expect(stdout).toContain('TRANSPOSITION_REJECTION_OK');
   });
 
@@ -220,7 +245,7 @@ except AgentLinkSecurityError as e:
     assert 'replay' in str(e).lower()
     print('REPLAY_REJECTION_OK')
 `;
-    const { stdout } = await execFileAsync('python3', ['-c', replayScript]);
+    const { stdout } = await runPython(['-c', replayScript]);
     expect(stdout).toContain('REPLAY_REJECTION_OK');
   });
 
@@ -258,7 +283,7 @@ except AgentLinkSecurityError as e:
     assert 'signature' in str(e).lower()
     print('FORGERY_REJECTION_OK')
 `;
-    const { stdout } = await execFileAsync('python3', ['-c', forgeryScript]);
+    const { stdout } = await runPython(['-c', forgeryScript]);
     expect(stdout).toContain('FORGERY_REJECTION_OK');
   });
 
@@ -266,7 +291,7 @@ except AgentLinkSecurityError as e:
     const aliceKeyDir = path.join(tempDir, 'mesh-alice');
     
     // Test whoami --json
-    const { stdout: whoamiOut } = await execFileAsync('agent-link', [
+    const { stdout: whoamiOut } = await runCli([
       'whoami',
       '--agent-id', 'mesh-alice',
       '--server', baseUrl,
@@ -281,7 +306,7 @@ except AgentLinkSecurityError as e:
     expect(whoamiData.activeLinksCount).toBeGreaterThanOrEqual(2); // Alice is connected to Bob and Dave
 
     // Test receive --once --json (clean empty inbox)
-    const { stdout: receiveOut } = await execFileAsync('agent-link', [
+    const { stdout: receiveOut } = await runCli([
       'receive',
       '--agent-id', 'mesh-alice',
       '--server', baseUrl,
@@ -299,7 +324,7 @@ except AgentLinkSecurityError as e:
     const daveKeyDir = path.join(tempDir, 'mesh-dave');
     
     // Revoke link_DA
-    const { stdout: revokeOut } = await execFileAsync('agent-link', [
+    const { stdout: revokeOut } = await runCli([
       'revoke',
       '--agent-id', 'mesh-dave',
       '--link-id', links['link_DA'],
