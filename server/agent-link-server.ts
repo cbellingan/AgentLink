@@ -211,6 +211,12 @@ export class AgentLinkServer {
   public async listen(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handleHttpRequest(req, res));
+      // Reverse proxy keepalive alignment: cloudflared has 90s idle connection timeout.
+      // Setting Node keepAliveTimeout to 120s guarantees cloudflared (not Node) closes idle sockets.
+      this.server.keepAliveTimeout = 120000;
+      this.server.headersTimeout = 125000;
+      this.server.requestTimeout = 300000;
+
       this.wss = new WebSocketServer({ noServer: true });
 
       this.server.on('upgrade', (req, socket, head) => {
@@ -254,6 +260,7 @@ export class AgentLinkServer {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Length': buf.length,
         'Connection': 'keep-alive',
+        'Keep-Alive': 'timeout=120, max=1000',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Human-Id',
@@ -664,11 +671,26 @@ export class AgentLinkServer {
 
     // 7. Agent Fleet Listing & De-registration
     if (req.method === 'GET' && parsedUrl === '/api/agents') {
-      const list = Array.from(this.agents.values()).map(a => ({
-        ...a,
-        relationship: 'owned',
-      }));
-      this.sendJson(res, 200, { status: 'ok', agents: list });
+      let filterAgentId: string | null = null;
+      if (req.url && req.url.includes('?')) {
+        const query = new URLSearchParams(req.url.split('?')[1]);
+        filterAgentId = query.get('agentId') || query.get('agent') || query.get('id') || null;
+      }
+
+      let list = Array.from(this.agents.values());
+      if (filterAgentId) {
+        list = list.filter(a => a.id === filterAgentId);
+      }
+
+      // Compact agent records: strip heavy qrPayload from list response to prevent chunk truncation
+      const sanitized = list.map(a => {
+        const { qrPayload, ...rest } = a;
+        return {
+          ...rest,
+          relationship: 'owned',
+        };
+      });
+      this.sendJson(res, 200, { status: 'ok', agents: sanitized });
       return;
     }
 

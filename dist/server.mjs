@@ -181,6 +181,9 @@ var AgentLinkServer = class {
   async listen() {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handleHttpRequest(req, res));
+      this.server.keepAliveTimeout = 12e4;
+      this.server.headersTimeout = 125e3;
+      this.server.requestTimeout = 3e5;
       this.wss = new WebSocketServer({ noServer: true });
       this.server.on("upgrade", (req, socket, head) => {
         if (req.url === "/ws" || req.url?.startsWith("/ws?")) {
@@ -219,6 +222,7 @@ var AgentLinkServer = class {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Length": buf.length,
         "Connection": "keep-alive",
+        "Keep-Alive": "timeout=120, max=1000",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Token, X-Human-Id"
@@ -557,11 +561,23 @@ var AgentLinkServer = class {
         return;
       }
       if (req.method === "GET" && parsedUrl === "/api/agents") {
-        const list = Array.from(this.agents.values()).map((a) => ({
-          ...a,
-          relationship: "owned"
-        }));
-        this.sendJson(res, 200, { status: "ok", agents: list });
+        let filterAgentId = null;
+        if (req.url && req.url.includes("?")) {
+          const query = new URLSearchParams(req.url.split("?")[1]);
+          filterAgentId = query.get("agentId") || query.get("agent") || query.get("id") || null;
+        }
+        let list = Array.from(this.agents.values());
+        if (filterAgentId) {
+          list = list.filter((a) => a.id === filterAgentId);
+        }
+        const sanitized = list.map((a) => {
+          const { qrPayload, ...rest } = a;
+          return {
+            ...rest,
+            relationship: "owned"
+          };
+        });
+        this.sendJson(res, 200, { status: "ok", agents: sanitized });
         return;
       }
       if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/links")) {
