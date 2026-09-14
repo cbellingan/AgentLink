@@ -312,6 +312,35 @@ Instructions for your Agent:
         });
       }
     }
+    const existingPuckTed = this.links.get("link_puck_ted_dual_pending");
+    if (existingPuckTed) {
+      const puckAgent = this.agents.get("puck");
+      const tedAgent = this.agents.get("ted");
+      if (tedAgent && (!tedAgent.ownerHumanId || tedAgent.ownerHumanId === "human_carl")) {
+        tedAgent.ownerHumanId = "human_26c999964b12";
+      }
+      if (existingPuckTed.responderHumanId !== "human_26c999964b12") {
+        existingPuckTed.responderHumanId = "human_26c999964b12";
+        const curApprovals = existingPuckTed.approvals || {};
+        existingPuckTed.approvals = {
+          [existingPuckTed.initiatorHumanId]: Boolean(curApprovals[existingPuckTed.initiatorHumanId]),
+          "human_26c999964b12": Boolean(curApprovals["human_26c999964b12"])
+        };
+      }
+      if (!existingPuckTed.safetyNumber) {
+        existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
+      }
+      if (!existingPuckTed.agentPrompt) {
+        existingPuckTed.agentPrompt = this.generateAgentPrompt({
+          myAgentId: "ted",
+          peerAgentId: "puck",
+          peerKid: puckAgent?.kid,
+          safetyNumber: existingPuckTed.safetyNumber,
+          note: existingPuckTed.note,
+          portalUrl: "https://agent.signetmesh.com"
+        });
+      }
+    }
     this.saveState();
   }
   async listen() {
