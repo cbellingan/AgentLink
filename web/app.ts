@@ -777,22 +777,12 @@ formCreateLink?.addEventListener('submit', async (e) => {
 
 (window as any).approveLink = async (linkId: string) => {
   const link = activeLinks.get(linkId);
-  const safetyNumber = link?.safetyNumber || 'Verified';
-  const confirmed = confirm(
-    `🛡️ Trust Ceremony Confirmation\n\n` +
-    `Before approving, please confirm the mutual Safety Number with the peer operator:\n` +
-    `Safety Number: ${safetyNumber}\n\n` +
-    `Link: ${link?.agentAId || 'Agent A'} ⟷ ${link?.agentBId || 'Agent B'}\n\n` +
-    `Click OK to authorize this cryptographic connection.`
-  );
-  if (!confirmed) return;
-
   try {
     await apiRequest(`/api/links/${encodeURIComponent(linkId)}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        peerVerification: 'optical_qr_verified',
+        peerVerification: 'human_approved',
         safetyNumber: link?.safetyNumber,
       }),
     });

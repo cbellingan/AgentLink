@@ -176,22 +176,25 @@ export class AgentLinkServer {
     safetyNumber: string;
     note?: string;
     portalUrl?: string;
+    skillUrl?: string;
   }): string {
     const portal = opts.portalUrl || 'https://agent.signetmesh.com';
+    const skillUrl = opts.skillUrl || `${portal}/skill.md`;
     return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on AgentLink (${portal}).
 
-Verification & Safety Anchors:
+📦 Skill Location: ${skillUrl}
 - Peer Agent ID: ${opts.peerAgentId}
-- Peer Key Fingerprint (Key ID): ${opts.peerKid || 'Pending peer registration'}
+- Peer Key Fingerprint: ${opts.peerKid || 'Pending peer registration'}
 - Mutual Safety Number: ${opts.safetyNumber}
 ${opts.note ? `- Purpose / Note: ${opts.note}\n` : ''}
 Instructions for your Agent:
-1. Confirm local cryptographic identity:
-   python3 -m agent_link.cli whoami --agent-id "${opts.myAgentId}" --json
-2. Report the mutual Safety Number (${opts.safetyNumber}) to your human operator for confirmation.
-3. Check approved link status before transmitting any payload:
+1. Load the AgentLink skill from: ${skillUrl}
+2. Connect to the mesh:
+   python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --once
+3. Check approved link status with '${opts.peerAgentId}':
    python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
-4. Fail-closed: Never transmit plaintext and reject any frame with unverified digital signatures.`;
+4. Send an end-to-end encrypted message once link is approved:
+   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}"`;
   }
 
   private discoverLocalAgents(): void {
@@ -1797,7 +1800,9 @@ Instructions for your Agent:
     }
 
     let filePath = path.join(this.staticPath, parsedUrl === '/' ? 'index.html' : parsedUrl);
-    if (!fs.existsSync(filePath)) {
+    if (parsedUrl === '/skill' || parsedUrl === '/skill.md') {
+      filePath = path.join(this.staticPath, 'skill.md');
+    } else if (!fs.existsSync(filePath)) {
       filePath = path.join(this.staticPath, 'index.html');
     }
 

@@ -527,29 +527,34 @@
 
     <!-- Agent Instructions & Trust Ceremony Modal -->
     <div id="agentPromptModal" class="modal-overlay hidden" data-testid="agent-prompt-modal">
-      <div class="modal-content" style="max-width: 540px;">
+      <div class="modal-content" style="max-width: 560px;">
         <div class="modal-header">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">🛡️</span>
-            <h3 style="font-size: 15px; margin: 0;">Human-to-Agent Connection Instructions</h3>
+            <span style="font-size: 20px;">📦</span>
+            <h3 style="font-size: 15px; margin: 0;">Connect Agent via Skill</h3>
           </div>
           <button type="button" id="btnCloseAgentPromptModal" class="modal-close-btn">&times;</button>
         </div>
         <div style="display: flex; flex-direction: column; gap: 14px;">
           <p style="font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5;">
-            Copy and paste this prompt directly into your agent's conversational interface. It gives your agent the peer's public key fingerprint and mutual Safety Number to ensure an authenticated, fail-closed connection.
+            To connect your agent, simply give it the AgentLink skill location. Your agent will read the skill, generate local keys, and connect autonomously.
           </p>
 
-          <div style="display: flex; gap: 12px; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 14px;">
-            <div style="font-size: 24px;">🔐</div>
-            <div>
-              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #10b981; font-weight: 600;">Mutual Safety Number</div>
-              <div id="modalSafetyNumberDisplay" style="font-family: var(--font-mono); font-size: 18px; font-weight: 700; color: #34d399;">---</div>
+          <div style="display: flex; gap: 12px; align-items: center; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 10px 14px;">
+            <div style="font-size: 22px;">🌐</div>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #60a5fa; font-weight: 600;">Skill Location (Repo / Docs)</div>
+              <div style="font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: #93c5fd; word-break: break-all;">https://agent.signetmesh.com/skill.md</div>
             </div>
           </div>
 
           <div>
-            <label style="display: block; font-size: 12px; font-weight: 500; margin-bottom: 6px;">Prompt for Your Agent (Copy & Paste)</label>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="font-size: 12px; font-weight: 500;">Prompt for Your Agent (Copy & Paste)</label>
+              <div style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono);">
+                Safety Fingerprint: <span id="modalSafetyNumberDisplay" style="color: #34d399; font-weight: 600;">---</span>
+              </div>
+            </div>
             <textarea id="modalAgentPromptText" readonly rows="9" style="width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); line-height: 1.4; resize: vertical;"></textarea>
           </div>
 

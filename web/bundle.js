@@ -2801,24 +2801,12 @@ Mutual Safety Number: ${inv.safetyNumber || "482-915"}`;
 };
 window.approveLink = async (linkId) => {
   const link = activeLinks.get(linkId);
-  const safetyNumber = link?.safetyNumber || "Verified";
-  const confirmed = confirm(
-    `\u{1F6E1}\uFE0F Trust Ceremony Confirmation
-
-Before approving, please confirm the mutual Safety Number with the peer operator:
-Safety Number: ${safetyNumber}
-
-Link: ${link?.agentAId || "Agent A"} \u27F7 ${link?.agentBId || "Agent B"}
-
-Click OK to authorize this cryptographic connection.`
-  );
-  if (!confirmed) return;
   try {
     await apiRequest(`/api/links/${encodeURIComponent(linkId)}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        peerVerification: "optical_qr_verified",
+        peerVerification: "human_approved",
         safetyNumber: link?.safetyNumber
       })
     });
