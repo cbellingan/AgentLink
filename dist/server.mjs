@@ -112,7 +112,11 @@ var AgentLinkServer = class {
         }
         if (parsed.agents) {
           for (const [k, v] of Object.entries(parsed.agents)) {
-            this.agents.set(k, v);
+            const agent = v;
+            if (agent.ownerHumanId === "human_carl") {
+              agent.ownerHumanId = "human_admin";
+            }
+            this.agents.set(k, agent);
             if (!this.messageQueues.has(k)) {
               this.messageQueues.set(k, []);
             }
@@ -120,7 +124,34 @@ var AgentLinkServer = class {
         }
         if (parsed.links) {
           for (const [k, v] of Object.entries(parsed.links)) {
-            this.links.set(k, v);
+            const link = v;
+            if (link.initiatorHumanId === "human_carl") {
+              link.initiatorHumanId = "human_admin";
+            }
+            if (link.responderHumanId === "human_carl") {
+              link.responderHumanId = "human_admin";
+            }
+            if (link.approvals) {
+              if (link.approvals["human_carl"] !== void 0) {
+                if (link.approvals["human_carl"] || link.approvals["human_admin"]) {
+                  link.approvals["human_admin"] = true;
+                }
+                delete link.approvals["human_carl"];
+              }
+              const allowedKeys = new Set([link.initiatorHumanId, link.responderHumanId].filter(Boolean));
+              for (const appKey of Object.keys(link.approvals)) {
+                if (!allowedKeys.has(appKey)) {
+                  delete link.approvals[appKey];
+                }
+              }
+              const isSameOwner = !link.responderHumanId || link.initiatorHumanId === link.responderHumanId;
+              const initOk = Boolean(link.approvals[link.initiatorHumanId]);
+              const respOk = isSameOwner || Boolean(link.approvals[link.responderHumanId]);
+              if (initOk && respOk) {
+                link.status = "active";
+              }
+            }
+            this.links.set(k, link);
           }
         }
         if (parsed.invites) {
@@ -319,16 +350,27 @@ Instructions for your Agent:
     if (existingPuckTed) {
       const puckAgent = this.agents.get("puck");
       const tedAgent = this.agents.get("ted");
+      if (puckAgent && (puckAgent.ownerHumanId === "human_carl" || !puckAgent.ownerHumanId)) {
+        puckAgent.ownerHumanId = "human_admin";
+      }
       if (tedAgent && (!tedAgent.ownerHumanId || tedAgent.ownerHumanId === "human_carl")) {
         tedAgent.ownerHumanId = "human_26c999964b12";
       }
+      if (existingPuckTed.initiatorHumanId === "human_carl") {
+        existingPuckTed.initiatorHumanId = "human_admin";
+      }
       if (existingPuckTed.responderHumanId !== "human_26c999964b12") {
         existingPuckTed.responderHumanId = "human_26c999964b12";
-        const curApprovals = existingPuckTed.approvals || {};
-        existingPuckTed.approvals = {
-          [existingPuckTed.initiatorHumanId]: Boolean(curApprovals[existingPuckTed.initiatorHumanId]),
-          "human_26c999964b12": Boolean(curApprovals["human_26c999964b12"])
-        };
+      }
+      const curApprovals = existingPuckTed.approvals || {};
+      const adminApproved = Boolean(curApprovals["human_admin"] || curApprovals["human_carl"]);
+      const responderApproved = Boolean(curApprovals["human_26c999964b12"]);
+      existingPuckTed.approvals = {
+        "human_admin": adminApproved,
+        "human_26c999964b12": responderApproved
+      };
+      if (adminApproved && responderApproved) {
+        existingPuckTed.status = "active";
       }
       if (!existingPuckTed.safetyNumber) {
         existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
@@ -1262,7 +1304,8 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             return;
           }
           const human = this.getAuthenticatedHuman(req);
-          const approverId = human?.id || body.approverHumanId || body.humanId || link.initiatorHumanId;
+          let approverId = human?.id || body.approverHumanId || body.humanId || link.initiatorHumanId;
+          if (approverId === "human_carl") approverId = "human_admin";
           if (!link.approvals) {
             link.approvals = {};
           }
@@ -1285,16 +1328,18 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           }
           const confirmedKid = body.confirmedKid || body.kid || (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid);
           const confirmedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber || link.safetyNumber;
-          link.approvals[approverId] = true;
-          link.approvalDetails[approverId] = {
+          const isInitiator = approverId === link.initiatorHumanId || human?.role === "admin" && (link.initiatorHumanId === "human_admin" || link.initiatorHumanId === "human_carl");
+          const targetSlot = isInitiator ? link.initiatorHumanId : approverId === link.responderHumanId ? link.responderHumanId : approverId;
+          link.approvals[targetSlot] = true;
+          link.approvalDetails[targetSlot] = {
             approved: true,
             confirmedAt: (/* @__PURE__ */ new Date()).toISOString(),
             confirmedKid,
             confirmedSafetyNumber
           };
           const isSameOwner = !link.responderHumanId || link.initiatorHumanId === link.responderHumanId;
-          const initiatorOk = Boolean(link.approvals[link.initiatorHumanId]);
-          const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId]);
+          const initiatorOk = Boolean(link.approvals[link.initiatorHumanId] || link.initiatorHumanId === "human_admin" && link.approvals["human_carl"] || link.initiatorHumanId === "human_carl" && link.approvals["human_admin"]);
+          const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId] || link.responderHumanId === "human_admin" && link.approvals["human_carl"] || link.responderHumanId === "human_carl" && link.approvals["human_admin"]);
           if (human?.role === "admin" && body.force || initiatorOk && responderOk) {
             link.status = "active";
           } else {

@@ -601,9 +601,16 @@ async function refreshPeerLinks() {
       linksListContainer.innerHTML = links.map(l => {
         const isActive = l.status === 'active';
         const approvals = l.approvals || {};
-        const totalOwners = Object.keys(approvals).length || 1;
-        const approvedCount = Object.values(approvals).filter(Boolean).length;
-        const isCurrentApproved = currentUser ? Boolean(approvals[currentUser.id]) : false;
+        const isCrossAccount = Boolean(l.responderHumanId && l.responderHumanId !== l.initiatorHumanId);
+        const totalOwners = isCrossAccount ? 2 : 1;
+        const initApproved = Boolean(approvals[l.initiatorHumanId] || (l.initiatorHumanId === 'human_admin' && approvals['human_carl']) || (l.initiatorHumanId === 'human_carl' && approvals['human_admin']));
+        const respApproved = !isCrossAccount || Boolean(approvals[l.responderHumanId] || (l.responderHumanId === 'human_admin' && approvals['human_carl']) || (l.responderHumanId === 'human_carl' && approvals['human_admin']));
+        const approvedCount = (initApproved ? 1 : 0) + (isCrossAccount && respApproved ? 1 : 0);
+        const isCurrentApproved = currentUser ? Boolean(
+          approvals[currentUser.id] ||
+          (currentUser.id === 'human_admin' && (approvals['human_admin'] || approvals['human_carl'])) ||
+          (currentUser.role === 'admin' && (approvals['human_admin'] || approvals[l.initiatorHumanId]))
+        ) : false;
         const peerEmail = l.responderHumanEmail || (l.initiatorHumanId !== currentUser?.id ? l.initiatorHumanEmail : null);
 
         return `
