@@ -1141,7 +1141,8 @@ Instructions for your Agent:
         const isAdmin = Boolean(humanSession && humanSession.role === 'admin');
 
         if (!apiKeyRecord && !isAdmin && token !== 'sec_apk_valid_12345') {
-          setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key`);
+          const tokenSnippet = token ? `${token.slice(0, 12)}...` : 'none';
+          setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key (${tokenSnippet})`);
           this.sendJson(res, 401, {
             error: 'invalid_api_key',
             message: 'Valid AgentLink API key required for registration',
@@ -1180,9 +1181,28 @@ Instructions for your Agent:
         if (!this.messageQueues.has(agentId)) {
           this.messageQueues.set(agentId, []);
         }
+
+        // Dynamically update link safety numbers and agent prompts when agent public keys register
+        for (const link of this.links.values()) {
+          if (link.agentAId === agentId || link.agentBId === agentId) {
+            const a = this.agents.get(link.agentAId);
+            const b = this.agents.get(link.agentBId);
+            if (a?.kid && b?.kid) {
+              link.safetyNumber = this.calculateSafetyNumber(a.kid, b.kid);
+              link.agentPrompt = this.generateAgentPrompt({
+                myAgentId: link.agentBId,
+                peerAgentId: link.agentAId,
+                peerKid: a.kid,
+                safetyNumber: link.safetyNumber,
+                note: link.note,
+                portalUrl: 'https://agent.signetmesh.com',
+              });
+            }
+          }
+        }
         this.saveState();
 
-        setSecurityNote(`AGENT REGISTERED: ${agentId} bound to ${ownerHumanId}`);
+        setSecurityNote(`AGENT REGISTERED: ${agentId} (${agentRecord.kid}) bound to ${ownerHumanId}`);
         this.notifySupervisors({ type: 'agent_registered', agent: agentRecord });
 
         this.sendJson(res, 200, {
