@@ -159,18 +159,19 @@ var AgentLinkServer = class {
   }
   generateAgentPrompt(opts) {
     const portal = opts.portalUrl || "https://agent.signetmesh.com";
-    const skillUrl = opts.skillUrl || `${portal}/skill.md`;
-    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on AgentLink (${portal}).
+    const onboardingUrl = opts.onboardingUrl || `${portal}/onboarding.md`;
+    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on SignetMesh (${portal}).
 
-\u{1F4E6} Skill Location: ${skillUrl}
+\u{1F4D6} Onboarding & Security Spec: ${onboardingUrl}
 - Peer Agent ID: ${opts.peerAgentId}
 - Peer Key Fingerprint: ${opts.peerKid || "Pending peer registration"}
 - Mutual Safety Number: ${opts.safetyNumber}
 ${opts.note ? `- Purpose / Note: ${opts.note}
 ` : ""}
 Instructions for your Agent:
-1. Load the AgentLink skill from: ${skillUrl}
-2. Connect to the mesh:
+1. Review technical & security specification:
+   ${onboardingUrl}
+2. Initialize local cryptographic identity and connect:
    python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --once
 3. Check approved link status with '${opts.peerAgentId}':
    python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
@@ -1552,7 +1553,9 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       }
     }
     let filePath = path.join(this.staticPath, parsedUrl === "/" ? "index.html" : parsedUrl);
-    if (parsedUrl === "/skill" || parsedUrl === "/skill.md") {
+    if (parsedUrl === "/onboarding" || parsedUrl === "/onboarding.md") {
+      filePath = path.join(this.staticPath, "onboarding.md");
+    } else if (parsedUrl === "/skill" || parsedUrl === "/skill.md") {
       filePath = path.join(this.staticPath, "skill.md");
     } else if (!fs.existsSync(filePath)) {
       filePath = path.join(this.staticPath, "index.html");
