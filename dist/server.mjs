@@ -369,12 +369,7 @@ Instructions for your Agent:
         "human_admin": adminApproved,
         "human_26c999964b12": responderApproved
       };
-      if (adminApproved && responderApproved) {
-        existingPuckTed.status = "active";
-      }
-      if (!existingPuckTed.safetyNumber) {
-        existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
-      }
+      existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
       if (!existingPuckTed.agentPrompt) {
         existingPuckTed.agentPrompt = this.generateAgentPrompt({
           myAgentId: "ted",
@@ -384,6 +379,19 @@ Instructions for your Agent:
           note: existingPuckTed.note,
           portalUrl: "https://agent.signetmesh.com"
         });
+      }
+      if (adminApproved && responderApproved) {
+        existingPuckTed.status = "active";
+        if (existingPuckTed.approvalDetails) {
+          if (existingPuckTed.approvalDetails["human_admin"]) {
+            existingPuckTed.approvalDetails["human_admin"].confirmedSafetyNumber = existingPuckTed.safetyNumber;
+            existingPuckTed.approvalDetails["human_admin"].confirmedKid = tedAgent?.kid || existingPuckTed.approvalDetails["human_admin"].confirmedKid;
+          }
+          if (existingPuckTed.approvalDetails["human_26c999964b12"]) {
+            existingPuckTed.approvalDetails["human_26c999964b12"].confirmedSafetyNumber = existingPuckTed.safetyNumber;
+            existingPuckTed.approvalDetails["human_26c999964b12"].confirmedKid = puckAgent?.kid || existingPuckTed.approvalDetails["human_26c999964b12"].confirmedKid;
+          }
+        }
       }
     }
     this.saveState();
@@ -605,7 +613,7 @@ Instructions for your Agent:
             name: name || (isAdmin ? "Administrator" : email.split("@")[0]),
             email,
             avatar: isAdmin ? "\u{1F451}" : isAuthorized ? "\u2728" : "\u{1F91D}",
-            role: isAdmin ? "admin" : isAuthorized ? "admin" : "collaborator"
+            role: isAdmin ? "admin" : "collaborator"
           };
           this.humanSessions.set(token, user);
           if (matchingInvite) {
@@ -766,7 +774,12 @@ Instructions for your Agent:
           this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
           return;
         }
-        const keysList = Array.from(this.apiKeys.values()).filter((k) => human.role === "admin" || k.ownerHumanId === human.id).map((k) => ({
+        const keysList = Array.from(this.apiKeys.values()).filter((k) => {
+          if (human.id === "human_admin") {
+            return k.ownerHumanId === "human_admin" || k.ownerHumanId === "human_carl";
+          }
+          return k.ownerHumanId === human.id;
+        }).map((k) => ({
           id: k.id,
           keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
           key: k.key,
@@ -986,14 +999,15 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         this.sendJson(res, 200, { status: "ok", deleted });
         return;
       }
-      if (req.method === "POST" && parsedUrl === "/api/agents/register") {
+      if (req.method === "POST" && (parsedUrl === "/api/agents/register" || parsedUrl === "/api/agents")) {
         readJson((body) => {
           const token = this.extractToken(req);
           const apiKeyRecord = token ? this.apiKeys.get(token) : null;
           const humanSession = token ? this.humanSessions.get(token) : null;
           const isAdmin = Boolean(humanSession && humanSession.role === "admin");
           if (!apiKeyRecord && !isAdmin && token !== "sec_apk_valid_12345") {
-            setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key`);
+            const tokenSnippet = token ? `${token.slice(0, 12)}...` : "none";
+            setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key (${tokenSnippet})`);
             this.sendJson(res, 401, {
               error: "invalid_api_key",
               message: "Valid AgentLink API key required for registration"
@@ -1003,7 +1017,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           if (apiKeyRecord) {
             apiKeyRecord.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
           }
-          const agentId = body.id || `agent_${crypto.randomBytes(4).toString("hex")}`;
+          const agentId = body.id || body.agentId || `agent_${crypto.randomBytes(4).toString("hex")}`;
           let ownerHumanId = "human_admin";
           if (apiKeyRecord && apiKeyRecord.ownerHumanId) {
             ownerHumanId = apiKeyRecord.ownerHumanId;
@@ -1028,8 +1042,35 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           if (!this.messageQueues.has(agentId)) {
             this.messageQueues.set(agentId, []);
           }
+          for (const link of this.links.values()) {
+            if (link.agentAId === agentId || link.agentBId === agentId) {
+              const a = this.agents.get(link.agentAId);
+              const b = this.agents.get(link.agentBId);
+              if (a?.kid && b?.kid) {
+                const previousSafetyNumber = link.safetyNumber;
+                link.safetyNumber = this.calculateSafetyNumber(a.kid, b.kid);
+                link.agentPrompt = this.generateAgentPrompt({
+                  myAgentId: link.agentBId,
+                  peerAgentId: link.agentAId,
+                  peerKid: a.kid,
+                  safetyNumber: link.safetyNumber,
+                  note: link.note,
+                  portalUrl: "https://agent.signetmesh.com"
+                });
+                if (previousSafetyNumber && previousSafetyNumber !== link.safetyNumber) {
+                  console.warn(`[AgentLink Security] Key rotation detected for agent '${agentId}'. Link '${link.id}' Safety Number changed from '${previousSafetyNumber}' to '${link.safetyNumber}'. Demoting to pending_approval and revoking stale approvals.`);
+                  link.status = "pending_approval";
+                  link.approvals = {
+                    [link.initiatorHumanId]: false,
+                    ...link.responderHumanId ? { [link.responderHumanId]: false } : {}
+                  };
+                  link.approvalDetails = {};
+                }
+              }
+            }
+          }
           this.saveState();
-          setSecurityNote(`AGENT REGISTERED: ${agentId} bound to ${ownerHumanId}`);
+          setSecurityNote(`AGENT REGISTERED: ${agentId} (${agentRecord.kid}) bound to ${ownerHumanId}`);
           this.notifySupervisors({ type: "agent_registered", agent: agentRecord });
           this.sendJson(res, 200, {
             status: "ok",
@@ -1052,14 +1093,21 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         if (filterAgentId) {
           list = list.filter((a) => a.id === filterAgentId);
         }
-        if (human && human.role !== "admin") {
-          list = list.filter((a) => a.ownerHumanId === human.id);
+        if (human) {
+          const isSystemAdmin = human.id === "human_admin";
+          list = list.filter((a) => {
+            if (isSystemAdmin) {
+              return a.ownerHumanId === "human_admin" || a.ownerHumanId === "human_carl";
+            }
+            return a.ownerHumanId === human.id;
+          });
         }
         const sanitized = list.map((a) => {
           const { qrPayload, ...rest } = a;
+          const isOwned = Boolean(human && (a.ownerHumanId === human.id || human.id === "human_admin" && (a.ownerHumanId === "human_admin" || a.ownerHumanId === "human_carl")));
           return {
             ...rest,
-            relationship: human && a.ownerHumanId === human.id ? "owned" : a.ownerHumanId === "human_admin" ? "owned" : "peer"
+            relationship: isOwned ? "owned" : "peer"
           };
         });
         this.sendJson(res, 200, { status: "ok", agents: sanitized });
@@ -1072,16 +1120,28 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           this.sendJson(res, 404, { error: "agent_not_found", message: `Agent '${agentId}' not found` });
           return;
         }
-        this.sendJson(res, 200, { status: "ok", agent: { ...agent, relationship: "owned" } });
+        const human = this.getAuthenticatedHuman(req);
+        const isOwned = Boolean(human && (agent.ownerHumanId === human.id || human.id === "human_admin" && (agent.ownerHumanId === "human_admin" || agent.ownerHumanId === "human_carl")));
+        this.sendJson(res, 200, { status: "ok", agent: { ...agent, relationship: isOwned ? "owned" : "peer" } });
         return;
       }
       if (req.method === "DELETE" && parsedUrl.startsWith("/api/agents/")) {
         const human = this.getAuthenticatedHuman(req);
-        if (!human || human.role !== "admin") {
-          this.sendJson(res, 403, { error: "forbidden", message: "Admin authentication required" });
+        if (!human) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
           return;
         }
         const agentId = parsedUrl.replace("/api/agents/", "").trim();
+        const agent = this.agents.get(agentId);
+        if (!agent) {
+          this.sendJson(res, 404, { error: "agent_not_found", message: `Agent '${agentId}' not found` });
+          return;
+        }
+        const isOwner = agent.ownerHumanId === human.id || human.id === "human_admin" && (agent.ownerHumanId === "human_admin" || agent.ownerHumanId === "human_carl");
+        if (!isOwner && human.role !== "admin") {
+          this.sendJson(res, 403, { error: "forbidden", message: "Not authorized to de-register this agent" });
+          return;
+        }
         const existed = this.agents.delete(agentId);
         this.messageQueues.delete(agentId);
         this.pollWaiters.delete(agentId);
@@ -1326,10 +1386,28 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               note: link.note
             });
           }
-          const confirmedKid = body.confirmedKid || body.kid || (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid);
-          const confirmedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber || link.safetyNumber;
+          const suppliedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber;
+          if (suppliedSafetyNumber && suppliedSafetyNumber !== link.safetyNumber) {
+            this.sendJson(res, 400, {
+              error: "safety_number_mismatch",
+              message: `Confirmed Safety Number '${suppliedSafetyNumber}' does not match current mutual Safety Number '${link.safetyNumber}'.`
+            });
+            return;
+          }
+          const validKids = [agentA?.kid, agentB?.kid].filter(Boolean);
+          const suppliedKid = body.confirmedKid || body.kid;
+          if (suppliedKid && validKids.length > 0 && !validKids.includes(suppliedKid)) {
+            this.sendJson(res, 400, {
+              error: "kid_mismatch",
+              message: `Confirmed Key ID '${suppliedKid}' does not match any agent in this link (expected ${validKids.join(" or ")}).`
+            });
+            return;
+          }
           const isInitiator = approverId === link.initiatorHumanId || human?.role === "admin" && (link.initiatorHumanId === "human_admin" || link.initiatorHumanId === "human_carl");
           const targetSlot = isInitiator ? link.initiatorHumanId : approverId === link.responderHumanId ? link.responderHumanId : approverId;
+          const defaultKid = (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid) || agentA?.kid || agentB?.kid || "unknown";
+          const confirmedKid = suppliedKid || defaultKid;
+          const confirmedSafetyNumber = suppliedSafetyNumber || link.safetyNumber;
           link.approvals[targetSlot] = true;
           link.approvalDetails[targetSlot] = {
             approved: true,
@@ -1340,7 +1418,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           const isSameOwner = !link.responderHumanId || link.initiatorHumanId === link.responderHumanId;
           const initiatorOk = Boolean(link.approvals[link.initiatorHumanId] || link.initiatorHumanId === "human_admin" && link.approvals["human_carl"] || link.initiatorHumanId === "human_carl" && link.approvals["human_admin"]);
           const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId] || link.responderHumanId === "human_admin" && link.approvals["human_carl"] || link.responderHumanId === "human_carl" && link.approvals["human_admin"]);
-          if (human?.role === "admin" && body.force || initiatorOk && responderOk) {
+          const initiatorDetails = link.approvalDetails[link.initiatorHumanId] || link.approvalDetails["human_admin"] || link.approvalDetails["human_carl"];
+          const responderDetails = link.responderHumanId ? link.approvalDetails[link.responderHumanId] || link.approvalDetails["human_admin"] || link.approvalDetails["human_carl"] : void 0;
+          const initiatorMatchesSafety = !initiatorDetails?.confirmedSafetyNumber || initiatorDetails.confirmedSafetyNumber === link.safetyNumber;
+          const responderMatchesSafety = isSameOwner || !responderDetails?.confirmedSafetyNumber || responderDetails.confirmedSafetyNumber === link.safetyNumber;
+          if ((human?.role === "admin" && body.force || initiatorOk && responderOk) && initiatorMatchesSafety && responderMatchesSafety) {
             link.status = "active";
           } else {
             link.status = "pending_approval";

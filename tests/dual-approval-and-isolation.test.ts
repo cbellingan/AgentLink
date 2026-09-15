@@ -457,4 +457,64 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(updatedLink.approvalDetails[adminId].confirmedSafetyNumber).toBe(linkObj.safetyNumber);
     expect(updatedLink.approvalDetails[adminId].confirmedKid).toBe('kid-alice-001');
   });
+
+  it('15. Strict Approval Ceremony: Rejects approval when confirmed Safety Number or Key ID does not match', async () => {
+    const linkRes = await apiPost('/api/links/request', {
+      agentAId: 'agent-alice',
+      agentBId: 'agent-bob',
+      initiatorHumanId: adminId,
+      responderHumanId: wifeId,
+    }, adminApiKey);
+    expect(linkRes.status).toBe(200);
+    const linkObj = linkRes.data.link;
+
+    // Attempt approval with wrong Safety Number
+    const badSafetyRes = await apiPost(`/api/links/${linkObj.id}/approve`, {
+      safetyNumber: '999-999',
+    }, adminToken);
+    expect(badSafetyRes.status).toBe(400);
+    expect(badSafetyRes.data.error).toBe('safety_number_mismatch');
+
+    // Attempt approval with wrong Key ID
+    const badKidRes = await apiPost(`/api/links/${linkObj.id}/approve`, {
+      kid: 'kid-fake-attacker',
+    }, adminToken);
+    expect(badKidRes.status).toBe(400);
+    expect(badKidRes.data.error).toBe('kid_mismatch');
+  });
+
+  it('16. Key Rotation Invariant: Key rotation automatically demotes active link and revokes approvals', async () => {
+    const linkRes = await apiPost('/api/links/request', {
+      agentAId: 'agent-alice',
+      agentBId: 'agent-bob',
+      initiatorHumanId: adminId,
+      responderHumanId: wifeId,
+    }, adminApiKey);
+    const linkId = linkRes.data.link.id;
+
+    // Both humans approve with genuine Safety Number
+    const safetyNumber = linkRes.data.link.safetyNumber;
+    const a1 = await apiPost(`/api/links/${linkId}/approve`, { safetyNumber }, adminToken);
+    expect(a1.status).toBe(200);
+    const a2 = await apiPost(`/api/links/${linkId}/approve`, { safetyNumber }, wifeToken);
+    expect(a2.status).toBe(200);
+    expect(a2.data.link.status).toBe('active');
+
+    // Now Agent Bob rotates its keys
+    const rotateRes = await apiPost('/api/agents', {
+      agentId: 'agent-bob',
+      ownerHumanId: wifeId,
+      kid: 'kid-bob-rotated-999',
+      signingPublicKey: 'b64_new_key',
+    }, wifeApiKey);
+    expect(rotateRes.status).toBe(200);
+
+    // Link must now be demoted to pending_approval, and approvals cleared
+    const checkLinkRes = await apiGet(`/api/links/${linkId}`, adminToken);
+    expect(checkLinkRes.status).toBe(200);
+    expect(checkLinkRes.data.link.status).toBe('pending_approval');
+    expect(checkLinkRes.data.link.safetyNumber).not.toBe(safetyNumber);
+    expect(checkLinkRes.data.link.approvals[adminId]).toBe(false);
+  });
 });
+

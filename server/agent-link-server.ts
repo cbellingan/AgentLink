@@ -409,12 +409,7 @@ Instructions for your Agent:
         'human_admin': adminApproved,
         'human_26c999964b12': responderApproved,
       };
-      if (adminApproved && responderApproved) {
-        existingPuckTed.status = 'active';
-      }
-      if (!existingPuckTed.safetyNumber) {
-        existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || 'puck', tedAgent?.kid || 'ted');
-      }
+      existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || 'puck', tedAgent?.kid || 'ted');
       if (!existingPuckTed.agentPrompt) {
         existingPuckTed.agentPrompt = this.generateAgentPrompt({
           myAgentId: 'ted',
@@ -424,6 +419,19 @@ Instructions for your Agent:
           note: existingPuckTed.note,
           portalUrl: 'https://agent.signetmesh.com',
         });
+      }
+      if (adminApproved && responderApproved) {
+        existingPuckTed.status = 'active';
+        if (existingPuckTed.approvalDetails) {
+          if (existingPuckTed.approvalDetails['human_admin']) {
+            existingPuckTed.approvalDetails['human_admin'].confirmedSafetyNumber = existingPuckTed.safetyNumber;
+            existingPuckTed.approvalDetails['human_admin'].confirmedKid = tedAgent?.kid || existingPuckTed.approvalDetails['human_admin'].confirmedKid;
+          }
+          if (existingPuckTed.approvalDetails['human_26c999964b12']) {
+            existingPuckTed.approvalDetails['human_26c999964b12'].confirmedSafetyNumber = existingPuckTed.safetyNumber;
+            existingPuckTed.approvalDetails['human_26c999964b12'].confirmedKid = puckAgent?.kid || existingPuckTed.approvalDetails['human_26c999964b12'].confirmedKid;
+          }
+        }
       }
     }
 
@@ -1138,7 +1146,7 @@ Instructions for your Agent:
     }
 
     // 6. Agent Registration Endpoint (Using API Key)
-    if (req.method === 'POST' && parsedUrl === '/api/agents/register') {
+    if (req.method === 'POST' && (parsedUrl === '/api/agents/register' || parsedUrl === '/api/agents')) {
       readJson((body) => {
         const token = this.extractToken(req);
         const apiKeyRecord = token ? this.apiKeys.get(token) : null;
@@ -1159,7 +1167,7 @@ Instructions for your Agent:
           apiKeyRecord.lastUsedAt = new Date().toISOString();
         }
 
-        const agentId = body.id || `agent_${crypto.randomBytes(4).toString('hex')}`;
+        const agentId = body.id || body.agentId || `agent_${crypto.randomBytes(4).toString('hex')}`;
         let ownerHumanId = 'human_admin';
         if (apiKeyRecord && apiKeyRecord.ownerHumanId) {
           ownerHumanId = apiKeyRecord.ownerHumanId;
@@ -1193,6 +1201,7 @@ Instructions for your Agent:
             const a = this.agents.get(link.agentAId);
             const b = this.agents.get(link.agentBId);
             if (a?.kid && b?.kid) {
+              const previousSafetyNumber = link.safetyNumber;
               link.safetyNumber = this.calculateSafetyNumber(a.kid, b.kid);
               link.agentPrompt = this.generateAgentPrompt({
                 myAgentId: link.agentBId,
@@ -1202,6 +1211,18 @@ Instructions for your Agent:
                 note: link.note,
                 portalUrl: 'https://agent.signetmesh.com',
               });
+
+              // Security Invariant: If key rotation alters the mutual safety number,
+              // demote the link back to pending_approval and revoke prior approvals.
+              if (previousSafetyNumber && previousSafetyNumber !== link.safetyNumber) {
+                console.warn(`[AgentLink Security] Key rotation detected for agent '${agentId}'. Link '${link.id}' Safety Number changed from '${previousSafetyNumber}' to '${link.safetyNumber}'. Demoting to pending_approval and revoking stale approvals.`);
+                link.status = 'pending_approval';
+                link.approvals = {
+                  [link.initiatorHumanId]: false,
+                  ...(link.responderHumanId ? { [link.responderHumanId]: false } : {}),
+                };
+                link.approvalDetails = {};
+              }
             }
           }
         }
@@ -1579,12 +1600,33 @@ Instructions for your Agent:
           });
         }
 
-        const confirmedKid = body.confirmedKid || body.kid || (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid);
-        const confirmedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber || link.safetyNumber;
+        // Strict Safety Invariant 1: Reject mismatched Safety Number
+        const suppliedSafetyNumber = body.confirmedSafetyNumber || body.safetyNumber;
+        if (suppliedSafetyNumber && suppliedSafetyNumber !== link.safetyNumber) {
+          this.sendJson(res, 400, {
+            error: 'safety_number_mismatch',
+            message: `Confirmed Safety Number '${suppliedSafetyNumber}' does not match current mutual Safety Number '${link.safetyNumber}'.`,
+          });
+          return;
+        }
 
-        // Route approval cleanly to initiator or responder slots
+        // Strict Safety Invariant 2: Reject mismatched Key ID (KID)
+        const validKids = [agentA?.kid, agentB?.kid].filter(Boolean) as string[];
+        const suppliedKid = body.confirmedKid || body.kid;
+        if (suppliedKid && validKids.length > 0 && !validKids.includes(suppliedKid)) {
+          this.sendJson(res, 400, {
+            error: 'kid_mismatch',
+            message: `Confirmed Key ID '${suppliedKid}' does not match any agent in this link (expected ${validKids.join(' or ')}).`,
+          });
+          return;
+        }
+
         const isInitiator = approverId === link.initiatorHumanId || (human?.role === 'admin' && (link.initiatorHumanId === 'human_admin' || link.initiatorHumanId === 'human_carl'));
         const targetSlot = isInitiator ? link.initiatorHumanId : (approverId === link.responderHumanId ? link.responderHumanId : approverId);
+
+        const defaultKid = (approverId === link.initiatorHumanId ? agentA?.kid : agentB?.kid) || agentA?.kid || agentB?.kid || 'unknown';
+        const confirmedKid = suppliedKid || defaultKid;
+        const confirmedSafetyNumber = suppliedSafetyNumber || link.safetyNumber;
 
         link.approvals[targetSlot] = true;
         link.approvalDetails[targetSlot] = {
@@ -1598,7 +1640,14 @@ Instructions for your Agent:
         const initiatorOk = Boolean(link.approvals[link.initiatorHumanId] || (link.initiatorHumanId === 'human_admin' && link.approvals['human_carl']) || (link.initiatorHumanId === 'human_carl' && link.approvals['human_admin']));
         const responderOk = isSameOwner || Boolean(link.approvals[link.responderHumanId!] || (link.responderHumanId === 'human_admin' && link.approvals['human_carl']) || (link.responderHumanId === 'human_carl' && link.approvals['human_admin']));
 
-        if ((human?.role === 'admin' && body.force) || (initiatorOk && responderOk)) {
+        // Strict Safety Invariant 3: Both recorded approvals must match the current mutual Safety Number
+        const initiatorDetails = link.approvalDetails[link.initiatorHumanId] || link.approvalDetails['human_admin'] || link.approvalDetails['human_carl'];
+        const responderDetails = link.responderHumanId ? (link.approvalDetails[link.responderHumanId] || link.approvalDetails['human_admin'] || link.approvalDetails['human_carl']) : undefined;
+
+        const initiatorMatchesSafety = !initiatorDetails?.confirmedSafetyNumber || initiatorDetails.confirmedSafetyNumber === link.safetyNumber;
+        const responderMatchesSafety = isSameOwner || !responderDetails?.confirmedSafetyNumber || responderDetails.confirmedSafetyNumber === link.safetyNumber;
+
+        if (((human?.role === 'admin' && body.force) || (initiatorOk && responderOk)) && initiatorMatchesSafety && responderMatchesSafety) {
           link.status = 'active';
         } else {
           link.status = 'pending_approval';
