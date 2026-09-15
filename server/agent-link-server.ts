@@ -685,7 +685,7 @@ Instructions for your Agent:
           name: name || (isAdmin ? 'Administrator' : email.split('@')[0]),
           email: email,
           avatar: isAdmin ? '👑' : (isAuthorized ? '✨' : '🤝'),
-          role: isAdmin ? 'admin' : (isAuthorized ? 'admin' : 'collaborator'),
+          role: isAdmin ? 'admin' : 'collaborator',
         };
         this.humanSessions.set(token, user);
 
@@ -886,7 +886,12 @@ Instructions for your Agent:
       }
 
       const keysList = Array.from(this.apiKeys.values())
-        .filter(k => human.role === 'admin' || k.ownerHumanId === human.id)
+        .filter(k => {
+          if (human.id === 'human_admin') {
+            return k.ownerHumanId === 'human_admin' || k.ownerHumanId === 'human_carl';
+          }
+          return k.ownerHumanId === human.id;
+        })
         .map(k => ({
           id: k.id,
           keyMasked: `${k.key.substring(0, 12)}...${k.key.substring(k.key.length - 6)}`,
@@ -1229,16 +1234,27 @@ Instructions for your Agent:
       if (filterAgentId) {
         list = list.filter(a => a.id === filterAgentId);
       }
-      if (human && human.role !== 'admin') {
-        list = list.filter(a => a.ownerHumanId === human.id);
+      // Strict Account Isolation: each operator only sees the agents they own in their fleet listing
+      if (human) {
+        const isSystemAdmin = human.id === 'human_admin';
+        list = list.filter(a => {
+          if (isSystemAdmin) {
+            return a.ownerHumanId === 'human_admin' || a.ownerHumanId === 'human_carl';
+          }
+          return a.ownerHumanId === human.id;
+        });
       }
 
       // Compact agent records: strip heavy qrPayload from list response to prevent chunk truncation
       const sanitized = list.map(a => {
         const { qrPayload, ...rest } = a;
+        const isOwned = Boolean(human && (
+          a.ownerHumanId === human.id ||
+          (human.id === 'human_admin' && (a.ownerHumanId === 'human_admin' || a.ownerHumanId === 'human_carl'))
+        ));
         return {
           ...rest,
-          relationship: human && a.ownerHumanId === human.id ? 'owned' : (a.ownerHumanId === 'human_admin' ? 'owned' : 'peer'),
+          relationship: isOwned ? 'owned' : 'peer',
         };
       });
       this.sendJson(res, 200, { status: 'ok', agents: sanitized });
@@ -1252,18 +1268,34 @@ Instructions for your Agent:
         this.sendJson(res, 404, { error: 'agent_not_found', message: `Agent '${agentId}' not found` });
         return;
       }
-      this.sendJson(res, 200, { status: 'ok', agent: { ...agent, relationship: 'owned' } });
+      const human = this.getAuthenticatedHuman(req);
+      const isOwned = Boolean(human && (
+        agent.ownerHumanId === human.id ||
+        (human.id === 'human_admin' && (agent.ownerHumanId === 'human_admin' || agent.ownerHumanId === 'human_carl'))
+      ));
+      this.sendJson(res, 200, { status: 'ok', agent: { ...agent, relationship: isOwned ? 'owned' : 'peer' } });
       return;
     }
 
     if (req.method === 'DELETE' && parsedUrl.startsWith('/api/agents/')) {
       const human = this.getAuthenticatedHuman(req);
-      if (!human || human.role !== 'admin') {
-        this.sendJson(res, 403, { error: 'forbidden', message: 'Admin authentication required' });
+      if (!human) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
         return;
       }
 
       const agentId = parsedUrl.replace('/api/agents/', '').trim();
+      const agent = this.agents.get(agentId);
+      if (!agent) {
+        this.sendJson(res, 404, { error: 'agent_not_found', message: `Agent '${agentId}' not found` });
+        return;
+      }
+
+      const isOwner = agent.ownerHumanId === human.id || (human.id === 'human_admin' && (agent.ownerHumanId === 'human_admin' || agent.ownerHumanId === 'human_carl'));
+      if (!isOwner && human.role !== 'admin') {
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Not authorized to de-register this agent' });
+        return;
+      }
       const existed = this.agents.delete(agentId);
       this.messageQueues.delete(agentId);
       this.pollWaiters.delete(agentId);
