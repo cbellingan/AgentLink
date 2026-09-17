@@ -422,6 +422,55 @@ btnSignOut?.addEventListener('click', async () => {
 });
 
 // 3. API Keys Management
+const revokeKeyModal = document.getElementById('revokeKeyModal');
+const btnCloseRevokeKeyModal = document.getElementById('btnCloseRevokeKeyModal');
+const btnCancelRevokeKey = document.getElementById('btnCancelRevokeKey');
+const btnConfirmRevokeKey = document.getElementById('btnConfirmRevokeKey');
+const revokeModalKeyLabel = document.getElementById('revokeModalKeyLabel');
+const revokeModalKeyMasked = document.getElementById('revokeModalKeyMasked');
+let pendingRevokeKeyId: string | null = null;
+
+function closeRevokeKeyModal() {
+  revokeKeyModal?.classList.add('hidden');
+  pendingRevokeKeyId = null;
+}
+
+btnCloseRevokeKeyModal?.addEventListener('click', closeRevokeKeyModal);
+btnCancelRevokeKey?.addEventListener('click', closeRevokeKeyModal);
+
+btnConfirmRevokeKey?.addEventListener('click', async () => {
+  if (!pendingRevokeKeyId) return;
+  const keyId = pendingRevokeKeyId;
+  closeRevokeKeyModal();
+  try {
+    await apiRequest(`/api/keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
+    await refreshApiKeys();
+  } catch (err: any) {
+    alert(`Revocation failed: ${err.message}`);
+  }
+});
+
+(window as any).openRevokeKeyModal = (keyId: string, label: string, keyMasked: string) => {
+  pendingRevokeKeyId = keyId;
+  if (revokeModalKeyLabel) revokeModalKeyLabel.textContent = label || 'Agent Key';
+  if (revokeModalKeyMasked) revokeModalKeyMasked.textContent = keyMasked || keyId;
+  revokeKeyModal?.classList.remove('hidden');
+};
+
+(window as any).copyApiKey = (keyVal: string, btn: HTMLButtonElement) => {
+  if (!keyVal) return;
+  navigator.clipboard.writeText(keyVal);
+  const origText = btn.textContent || '📋 Copy';
+  btn.textContent = '✓ Copied!';
+  btn.style.color = '#34d399';
+  btn.style.borderColor = '#10b981';
+  setTimeout(() => {
+    btn.textContent = origText;
+    btn.style.color = '';
+    btn.style.borderColor = '';
+  }, 2000);
+};
+
 async function refreshApiKeys() {
   try {
     const res = await apiRequest('/api/keys');
@@ -437,9 +486,9 @@ async function refreshApiKeys() {
             <span style="font-size: 11px; color: var(--text-secondary); margin-left: 8px;">${k.label || 'Agent Key'}</span>
             <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">Created: ${new Date(k.createdAt).toLocaleDateString()}</div>
           </div>
-          <div style="display: flex; gap: 6px;">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${k.key}')">📋 Copy</button>
-            <button type="button" class="btn btn-danger btn-sm" onclick="window.revokeKey('${k.id}')">Revoke</button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="window.copyApiKey('${k.key}', this)">📋 Copy</button>
+            <button type="button" class="btn btn-danger btn-sm" style="background: transparent; color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); padding: 4px 8px; font-size: 11px;" onclick="window.openRevokeKeyModal('${k.id}', '${(k.label || 'Agent Key').replace(/'/g, "\\'")}', '${k.keyMasked || k.key}')">Revoke</button>
           </div>
         </div>
       `).join('');
@@ -475,16 +524,6 @@ btnCopyNewKey?.addEventListener('click', () => {
     setTimeout(() => { btnCopyNewKey.textContent = '📋 Copy Key'; }, 2000);
   }
 });
-
-(window as any).revokeKey = async (keyId: string) => {
-  if (!confirm('Revoke this API key? Connected agents using it will need a new key.')) return;
-  try {
-    await apiRequest(`/api/keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
-    await refreshApiKeys();
-  } catch (err: any) {
-    alert(`Revocation failed: ${err.message}`);
-  }
-};
 
 // 4. Fleet Agents Management
 async function refreshFleetAgents() {

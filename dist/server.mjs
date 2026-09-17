@@ -835,8 +835,8 @@ Instructions for your Agent:
           return;
         }
         const keysList = Array.from(this.apiKeys.values()).filter((k) => {
-          if (human.id === "human_admin") {
-            return k.ownerHumanId === "human_admin" || k.ownerHumanId === "human_carl";
+          if (human.role === "admin" || human.id === "human_admin" || human.id === "human_carl") {
+            return true;
           }
           return k.ownerHumanId === human.id;
         }).map((k) => ({

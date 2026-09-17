@@ -406,6 +406,30 @@
 
 
 
+    <!-- Revoke API Key Confirmation Modal -->
+    <div id="revokeKeyModal" class="modal-overlay hidden" data-testid="revoke-key-modal">
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h3 style="font-size: 15px; color: #ef4444;">⚠️ Revoke API Key</h3>
+          <button type="button" id="btnCloseRevokeKeyModal" class="modal-close-btn">&times;</button>
+        </div>
+        <p style="font-size: 13px; color: var(--text-primary); margin-bottom: 12px;">
+          Are you sure you want to permanently revoke this API key?
+        </p>
+        <div style="background: var(--bg-secondary); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 16px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-primary);" id="revokeModalKeyLabel"></div>
+          <div style="font-size: 11px; font-family: var(--font-mono); color: var(--accent); margin-top: 4px;" id="revokeModalKeyMasked"></div>
+        </div>
+        <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 16px;">
+          Any autonomous agents currently using this key will immediately be disconnected and fail authentication.
+        </p>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button type="button" id="btnCancelRevokeKey" class="btn btn-secondary btn-sm">Cancel</button>
+          <button type="button" id="btnConfirmRevokeKey" class="btn btn-danger btn-sm" style="background: #ef4444; border-color: #dc2626;">Permanently Revoke</button>
+        </div>
+      </div>
+    </div>
+
     <!-- About & Zero-Knowledge Architecture Modal -->
     <div id="aboutModal" class="modal-overlay hidden" data-testid="about-modal">
       <div class="modal-content" style="max-width: 680px; max-height: 85vh; overflow-y: auto;">
