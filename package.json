@@ -19,7 +19,8 @@
     "tunnel": "node scripts/tunnel.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "audit:security": "node scripts/security-auditor.mjs"
+    "audit:security": "node scripts/security-auditor.mjs",
+    "bug": "node scripts/get-bug.mjs"
   },
   "keywords": ["agent", "zero-knowledge", "security", "ed25519", "x25519", "qr", "mcp"],
   "author": "AgentLink Maintainers",
