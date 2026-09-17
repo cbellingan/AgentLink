@@ -140,15 +140,29 @@ async function run() {
     }
   });
 
+  // 4b. Unauthenticated Query Protection: GET /api/agents & /api/links must return 401
+  await testEndpoint('4b. Unauthenticated Query Protection (401 Enforced)', async () => {
+    const unauthAgents = await safeFetch(`${target}/api/agents`);
+    if (unauthAgents.status !== 401) throw new Error(`Expected 401 for unauthenticated /api/agents, got ${unauthAgents.status}`);
+    const unauthLinks = await safeFetch(`${target}/api/links`);
+    if (unauthLinks.status !== 401) throw new Error(`Expected 401 for unauthenticated /api/links, got ${unauthLinks.status}`);
+    const unauthPoll = await safeFetch(`${target}/api/agents/any-agent/poll`);
+    if (unauthPoll.status !== 401) throw new Error(`Expected 401 for unauthenticated /poll, got ${unauthPoll.status}`);
+  });
+
   // 5. Single Agent Direct Lookup (/api/agents/:id)
   await testEndpoint('5. Single Agent Direct Lookup (/api/agents/:id)', async () => {
     if (!sampleAgentId) {
       // Test 404 behavior for unknown agent
-      const res = await safeFetch(`${target}/api/agents/non_existent_agent_999`);
+      const res = await safeFetch(`${target}/api/agents/non_existent_agent_999`, {
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+      });
       if (res.status !== 404) throw new Error(`Expected 404 for unknown agent, got ${res.status}`);
       return;
     }
-    const res = await safeFetch(`${target}/api/agents/${sampleAgentId}`);
+    const res = await safeFetch(`${target}/api/agents/${sampleAgentId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const rawText = await res.text();
     verifyHeaders(res, rawText);
@@ -160,7 +174,9 @@ async function run() {
 
   // 6. Global Links Listing & Serialization Invariant (/api/links)
   await testEndpoint('6. Global Links Listing & Headers (/api/links)', async () => {
-    const res = await safeFetch(`${target}/api/links`);
+    const res = await safeFetch(`${target}/api/links`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const rawText = await res.text();
     verifyHeaders(res, rawText);
@@ -171,7 +187,9 @@ async function run() {
   // 7. Targeted Filtered Links Listing (/api/links?agentId=...)
   await testEndpoint('7. Filtered Links Listing (/api/links?agentId=...)', async () => {
     const filterId = sampleAgentId || 'puck';
-    const res = await safeFetch(`${target}/api/links?agentId=${filterId}`);
+    const res = await safeFetch(`${target}/api/links?agentId=${filterId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const rawText = await res.text();
     verifyHeaders(res, rawText);
@@ -206,7 +224,10 @@ async function run() {
 import urllib.request, json, sys
 
 target = "${target}"
-headers = {"User-Agent": "AgentLink-CLI/1.0"}
+headers = {
+    "User-Agent": "AgentLink-CLI/1.0",
+    "Authorization": "Bearer ${adminToken}",
+}
 
 # 1. Test /api/links with Python urllib
 req = urllib.request.Request(f"{target}/api/links", headers=headers)

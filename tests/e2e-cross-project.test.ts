@@ -164,7 +164,9 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     expect(stdout).toContain("Successfully registered! Status: ok");
 
     // Verify registration reflects on server fleet
-    const agentsRes = await fetch(`${baseUrl}/api/agents`).then(r => r.json());
+    const agentsRes = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
     const aliceAgent = agentsRes.agents.find((a: any) => a.id === 'agent-alice');
     expect(aliceAgent).toBeDefined();
     expect(aliceAgent.kid).toMatch(/^kid-agent-alice-/);
@@ -186,7 +188,9 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     expect(stdout).toContain("Successfully registered! Status: ok");
 
     // Verify both agents exist in server fleet
-    const agentsRes = await fetch(`${baseUrl}/api/agents`).then(r => r.json());
+    const agentsRes = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
     expect(agentsRes.agents.some((a: any) => a.id === 'agent-alice')).toBe(true);
     expect(agentsRes.agents.some((a: any) => a.id === 'agent-bob')).toBe(true);
   });
@@ -313,7 +317,9 @@ print("E2EE_VERIFICATION_SUCCESS")
 
   it('Step 7b: Cross-Runtime Client List Retrieval & Explicit Content-Length Header Invariant', async () => {
     // 1. Verify HTTP Response Headers strictly comply with Explicit Headers Invariant
-    const linksRes = await fetch(`${baseUrl}/api/links`);
+    const linksRes = await fetch(`${baseUrl}/api/links`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(linksRes.status).toBe(200);
     const linksContentType = linksRes.headers.get('content-type') || '';
     expect(linksContentType).toContain('application/json');
@@ -322,7 +328,9 @@ print("E2EE_VERIFICATION_SUCCESS")
     const linksText = await linksRes.text();
     expect(parseInt(linksContentLength!, 10)).toBe(Buffer.byteLength(linksText, 'utf8'));
 
-    const agentsRes = await fetch(`${baseUrl}/api/agents`);
+    const agentsRes = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(agentsRes.status).toBe(200);
     const agentsContentLength = agentsRes.headers.get('content-length');
     expect(agentsContentLength).toBeTruthy();

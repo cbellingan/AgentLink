@@ -118,11 +118,15 @@ describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
   });
 
   it('1. Verifies entire 4-agent fleet is registered and linked in ring mesh', async () => {
-    const agentsRes = await fetch(`${baseUrl}/api/agents`).then(r => r.json());
+    const agentsRes = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
     for (const agentId of agents) {
       expect(agentsRes.agents.some((a: any) => a.id === agentId)).toBe(true);
     }
-    const linksRes = await fetch(`${baseUrl}/api/links`).then(r => r.json());
+    const linksRes = await fetch(`${baseUrl}/api/links`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
     expect(linksRes.links.length).toBeGreaterThanOrEqual(4);
   });
 
@@ -336,11 +340,15 @@ except AgentLinkSecurityError as e:
     expect(revokeOut).toContain('"severed": true');
 
     // Verify link_DA is gone from server
-    const getRes = await fetch(`${baseUrl}/api/links/${links['link_DA']}`);
+    const getRes = await fetch(`${baseUrl}/api/links/${links['link_DA']}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(getRes.status).toBe(404);
 
     // Verify remaining links (AB, BC, CD) remain active and functional
-    const getAbRes = await fetch(`${baseUrl}/api/links/${links['link_AB']}`);
+    const getAbRes = await fetch(`${baseUrl}/api/links/${links['link_AB']}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(getAbRes.status).toBe(200);
     const abData = await getAbRes.json();
     expect(abData.link.status).toBe('active');

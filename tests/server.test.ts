@@ -12,6 +12,7 @@ describe('AgentLink Server Test Suite', () => {
   let port: number;
   let baseUrl: string;
   let tempDir: string;
+  let adminToken: string;
 
   beforeAll(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlink-server-test-'));
@@ -59,6 +60,7 @@ describe('AgentLink Server Test Suite', () => {
     expect(data.token).toMatch(/^sec_hum_/);
     expect(data.user.email).toBe(TEST_ADMIN_EMAIL);
     expect(data.user.role).toBe('admin');
+    adminToken = data.token;
   });
 
   it('2b. Authenticates authorized co-operator email (via authorized hash) and issues session', async () => {
@@ -168,7 +170,9 @@ describe('AgentLink Server Test Suite', () => {
     expect(regData.pollUrl).toBe('/api/agents/ted-agent/poll');
 
     // 3. Confirm agent appears in fleet listing
-    const agentsRes = await fetch(`${baseUrl}/api/agents`).then(r => r.json());
+    const agentsRes = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
     expect(agentsRes.agents.some((a: any) => a.id === 'ted-agent')).toBe(true);
   });
 
@@ -200,7 +204,9 @@ describe('AgentLink Server Test Suite', () => {
     expect(msgRes.status).toBe('ok');
 
     // 3. Retrieve link conversation flow
-    const getRes = await fetch(`${baseUrl}/api/links/${linkId}`);
+    const getRes = await fetch(`${baseUrl}/api/links/${linkId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(getRes.status).toBe(200);
     const getData = await getRes.json();
     expect(getData.status).toBe('ok');
@@ -224,7 +230,9 @@ describe('AgentLink Server Test Suite', () => {
   });
 
   it('8. Regression: GET /api/agents strips heavy qrPayload to prevent chunked response truncation', async () => {
-    const res = await fetch(`${baseUrl}/api/agents`);
+    const res = await fetch(`${baseUrl}/api/agents`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(Array.isArray(data.agents)).toBe(true);
@@ -241,13 +249,17 @@ describe('AgentLink Server Test Suite', () => {
 
   it('9. Regression: Direct lookup and filtered query preserve single agent details', async () => {
     // Single agent lookup by ID
-    const singleRes = await fetch(`${baseUrl}/api/agents/ted-agent`);
+    const singleRes = await fetch(`${baseUrl}/api/agents/ted-agent`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(singleRes.status).toBe(200);
     const singleData = await singleRes.json();
     expect(singleData.agent.id).toBe('ted-agent');
 
     // Filtered query via ?agentId=ted-agent
-    const filterRes = await fetch(`${baseUrl}/api/agents?agentId=ted-agent`);
+    const filterRes = await fetch(`${baseUrl}/api/agents?agentId=ted-agent`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
     expect(filterRes.status).toBe(200);
     const filterData = await filterRes.json();
     expect(filterData.agents.length).toBe(1);

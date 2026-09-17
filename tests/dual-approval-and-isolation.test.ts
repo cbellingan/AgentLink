@@ -267,8 +267,18 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(sendRes.data.error).toBe('link_not_approved');
     expect(sendRes.data.message).toContain('pending_approval');
 
-    // Verify Bob's queue is completely empty
-    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100');
+    // Verify unauthenticated poll is rejected with 401
+    const unauthPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100');
+    expect(unauthPoll.status).toBe(401);
+    expect(unauthPoll.data.error).toBe('unauthorized');
+
+    // Verify cross-operator unauthorized poll is rejected with 403
+    const crossPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100', adminApiKey);
+    expect(crossPoll.status).toBe(403);
+    expect(crossPoll.data.error).toBe('forbidden');
+
+    // Verify Bob's queue is completely empty when polled with Bob's key
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100', wifeApiKey);
     expect(bobPoll.status).toBe(200);
     expect(bobPoll.data.messages.length).toBe(0);
   });
@@ -309,7 +319,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(sendRes.data.status).toBe('ok');
 
     // Bob polls and receives the message
-    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=200');
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=200', wifeApiKey);
     expect(bobPoll.status).toBe(200);
     expect(bobPoll.data.messages.length).toBe(1);
     expect(bobPoll.data.messages[0].senderId).toBe('agent-alice');
@@ -326,14 +336,14 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
       expect(res.status).toBe(200);
     }
 
-    // Agent Charlie (on outside link) polls
-    const charliePoll = await apiGet('/api/agents/agent-charlie/poll?timeout=100');
+    // Agent Charlie (on outside link) polls with Charlie's key
+    const charliePoll = await apiGet('/api/agents/agent-charlie/poll?timeout=100', adminApiKey);
     expect(charliePoll.status).toBe(200);
     // Strict Invariant: Exactly zero noise leaked to Charlie
     expect(charliePoll.data.messages.length).toBe(0);
 
-    // Bob drains all 10 messages
-    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100');
+    // Bob drains all 10 messages with Bob's key
+    const bobPoll = await apiGet('/api/agents/agent-bob/poll?timeout=100', wifeApiKey);
     expect(bobPoll.status).toBe(200);
     expect(bobPoll.data.messages.length).toBe(10);
   });

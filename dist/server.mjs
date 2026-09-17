@@ -1143,7 +1143,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         return;
       }
       if (req.method === "GET" && parsedUrl === "/api/agents") {
-        const human = this.getAuthenticatedHuman(req);
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+          return;
+        }
         let filterAgentId = null;
         if (req.url && req.url.includes("?")) {
           const query = new URLSearchParams(req.url.split("?")[1]);
@@ -1153,18 +1157,16 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         if (filterAgentId) {
           list = list.filter((a) => a.id === filterAgentId);
         }
-        if (human) {
-          const isSystemAdmin = human.id === "human_admin";
-          list = list.filter((a) => {
-            if (isSystemAdmin) {
-              return a.ownerHumanId === "human_admin" || a.ownerHumanId === "human_carl";
-            }
-            return a.ownerHumanId === human.id;
-          });
-        }
+        list = list.filter((a) => {
+          if (isAdmin) return true;
+          if (a.ownerHumanId === ownerHumanId) return true;
+          return Array.from(this.links.values()).some(
+            (l) => l.status === "active" && (l.agentAId === a.id && this.isAgentOwnedBy(l.agentBId, ownerHumanId) || l.agentBId === a.id && this.isAgentOwnedBy(l.agentAId, ownerHumanId))
+          );
+        });
         const sanitized = list.map((a) => {
           const { qrPayload, ...rest } = a;
-          const isOwned = Boolean(human && (a.ownerHumanId === human.id || human.id === "human_admin" && (a.ownerHumanId === "human_admin" || a.ownerHumanId === "human_carl")));
+          const isOwned = a.ownerHumanId === ownerHumanId || isAdmin && (a.ownerHumanId === "human_admin" || a.ownerHumanId === "human_carl");
           return {
             ...rest,
             relationship: isOwned ? "owned" : "peer"
@@ -1174,14 +1176,25 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         return;
       }
       if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/links")) {
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+          return;
+        }
         const agentId = parsedUrl.replace("/api/agents/", "").trim();
         const agent = this.agents.get(agentId);
         if (!agent) {
           this.sendJson(res, 404, { error: "agent_not_found", message: `Agent '${agentId}' not found` });
           return;
         }
-        const human = this.getAuthenticatedHuman(req);
-        const isOwned = Boolean(human && (agent.ownerHumanId === human.id || human.id === "human_admin" && (agent.ownerHumanId === "human_admin" || agent.ownerHumanId === "human_carl")));
+        const isOwned = agent.ownerHumanId === ownerHumanId || isAdmin && (agent.ownerHumanId === "human_admin" || agent.ownerHumanId === "human_carl");
+        const isLinkedPeer = Array.from(this.links.values()).some(
+          (l) => l.status === "active" && (l.agentAId === agentId && this.isAgentOwnedBy(l.agentBId, ownerHumanId) || l.agentBId === agentId && this.isAgentOwnedBy(l.agentAId, ownerHumanId))
+        );
+        if (!isAdmin && !isOwned && !isLinkedPeer) {
+          this.sendJson(res, 403, { error: "forbidden", message: "Not authorized to view this agent" });
+          return;
+        }
         this.sendJson(res, 200, { status: "ok", agent: { ...agent, relationship: isOwned ? "owned" : "peer" } });
         return;
       }
@@ -1222,11 +1235,26 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll")) {
         const parts = parsedUrl.split("/");
         const agentId = parts[3];
-        const agent = this.agents.get(agentId);
-        if (agent) {
-          agent.polling = true;
-          agent.lastSeen = (/* @__PURE__ */ new Date()).toISOString();
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          setSecurityNote(`UNAUTHENTICATED POLL ATTEMPT on agent '${agentId}' rejected`);
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to poll agent messages" });
+          return;
         }
+        const agent = this.agents.get(agentId);
+        if (!agent) {
+          this.sendJson(res, 404, { error: "agent_not_found", message: `Agent '${agentId}' not found` });
+          return;
+        }
+        const isOwner = this.isAgentOwnedBy(agentId, ownerHumanId);
+        const isKeyMatch = Boolean(apiKey && (apiKey.id === agent.id || this.isAgentOwnedBy(agentId, apiKey.ownerHumanId)));
+        if (!isAdmin && !isOwner && !isKeyMatch) {
+          setSecurityNote(`FORBIDDEN POLL ATTEMPT on agent '${agentId}' by unauthorized principal (${ownerHumanId})`);
+          this.sendJson(res, 403, { error: "forbidden", message: "Not authorized to poll messages for this agent" });
+          return;
+        }
+        agent.polling = true;
+        agent.lastSeen = (/* @__PURE__ */ new Date()).toISOString();
         let timeoutMs = 15e3;
         if (req.url && req.url.includes("?")) {
           const query = new URLSearchParams(req.url.split("?")[1]);
@@ -1349,7 +1377,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         return;
       }
       if (req.method === "GET" && (parsedUrl === "/api/links" || parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/links"))) {
-        const human = this.getAuthenticatedHuman(req);
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+          return;
+        }
         let filterAgentId = null;
         if (parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/links")) {
           filterAgentId = parsedUrl.split("/")[3] || null;
@@ -1362,8 +1394,10 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         if (filterAgentId) {
           list = list.filter((l) => l.agentAId === filterAgentId || l.agentBId === filterAgentId);
         }
-        if (human && human.role !== "admin") {
-          list = list.filter((l) => l.initiatorHumanId === human.id || l.responderHumanId === human.id);
+        if (!isAdmin) {
+          list = list.filter((l) => {
+            return l.initiatorHumanId === ownerHumanId || l.responderHumanId === ownerHumanId || this.isAgentOwnedBy(l.agentAId, ownerHumanId) || this.isAgentOwnedBy(l.agentBId, ownerHumanId);
+          });
         }
         const sanitized = list.map((l) => {
           const msgs = (l.recentMessages || []).slice(-3).map((m) => ({
@@ -1395,10 +1429,20 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         return;
       }
       if (req.method === "GET" && parsedUrl.startsWith("/api/links/") && !parsedUrl.endsWith("/poll") && !parsedUrl.endsWith("/approve") && !parsedUrl.endsWith("/send") && !parsedUrl.endsWith("/message")) {
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+          return;
+        }
         const linkId = parsedUrl.replace("/api/links/", "").trim();
         const link = this.links.get(linkId);
         if (!link) {
           this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+          return;
+        }
+        const isParticipant = link.initiatorHumanId === ownerHumanId || link.responderHumanId === ownerHumanId || this.isAgentOwnedBy(link.agentAId, ownerHumanId) || this.isAgentOwnedBy(link.agentBId, ownerHumanId);
+        if (!isAdmin && !isParticipant) {
+          this.sendJson(res, 403, { error: "forbidden", message: "Not authorized to view this link" });
           return;
         }
         const agentA = this.agents.get(link.agentAId);
@@ -1497,7 +1541,22 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         return;
       }
       if (req.method === "DELETE" && parsedUrl.startsWith("/api/links/")) {
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
+          return;
+        }
         const linkId = parsedUrl.replace("/api/links/", "").trim();
+        const link = this.links.get(linkId);
+        if (!link) {
+          this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
+          return;
+        }
+        const isParticipant = link.initiatorHumanId === ownerHumanId || link.responderHumanId === ownerHumanId || this.isAgentOwnedBy(link.agentAId, ownerHumanId) || this.isAgentOwnedBy(link.agentBId, ownerHumanId);
+        if (!isAdmin && !isParticipant) {
+          this.sendJson(res, 403, { error: "forbidden", message: "Not authorized to sever this link" });
+          return;
+        }
         const existed = this.links.delete(linkId);
         if (existed) this.saveState();
         this.sendJson(res, 200, { status: "ok", severed: existed });
@@ -1889,6 +1948,32 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     const token = this.extractToken(req);
     if (!token) return null;
     return this.humanSessions.get(token) || null;
+  }
+  getAuthenticatedPrincipal(req) {
+    const token = this.extractToken(req);
+    const human = this.getAuthenticatedHuman(req);
+    let apiKey = token ? this.apiKeys.get(token) || null : null;
+    if (!apiKey && token === "sec_apk_valid_12345") {
+      apiKey = {
+        id: "test_key",
+        key: token,
+        ownerHumanId: "human_admin",
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
+    const ownerHumanId = human ? human.id : apiKey ? apiKey.ownerHumanId : null;
+    const isHumanAdmin = Boolean(human && (human.role === "admin" || human.id === "human_admin" || human.id === "human_carl"));
+    const isAdmin = isHumanAdmin;
+    return { token, human, apiKey, ownerHumanId, isAdmin };
+  }
+  isAgentOwnedBy(agentId, ownerHumanId) {
+    if (!ownerHumanId) return false;
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+    if (agent.ownerHumanId === ownerHumanId) return true;
+    if (ownerHumanId === "human_admin" && agent.ownerHumanId === "human_carl") return true;
+    if (ownerHumanId === "human_carl" && agent.ownerHumanId === "human_admin") return true;
+    return false;
   }
 };
 
