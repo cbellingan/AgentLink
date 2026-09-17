@@ -48,6 +48,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     // 1. Create temporary directory for isolated agent keyrings and state
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-link-e2e-'));
     process.env.DATA_PATH = path.join(tempDir, 'state.json');
+    process.env.BUG_LOG_PATH = path.join(tempDir, 'bug-reports.jsonl');
     process.env.NODE_ENV = 'test';
     process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
 

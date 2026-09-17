@@ -66,6 +66,8 @@ export class AgentLinkServer {
 
     if (process.env.BUG_LOG_PATH) {
       this.bugLogPath = path.resolve(process.env.BUG_LOG_PATH);
+    } else if (process.env.NODE_ENV === 'test') {
+      this.bugLogPath = path.join(os.tmpdir(), `agentlink-test-bugs-${process.pid}.jsonl`);
     } else {
       this.bugLogPath = path.resolve('.data/bugs/bug-reports.jsonl');
     }
@@ -90,7 +92,17 @@ export class AgentLinkServer {
           } catch {
             return null;
           }
-        }).filter((b): b is BugReportRecord => b !== null);
+        }).filter((b): b is BugReportRecord => {
+          if (!b) return false;
+          // In production, strictly exclude simulated test / e2e validation anomalies
+          if (process.env.NODE_ENV === 'production') {
+            const isTest = b.agentId === 'agent-alice' ||
+              (b.title && b.title.toLowerCase().includes('test anomaly')) ||
+              (b.details && b.details.toLowerCase().includes('for e2e validation'));
+            if (isTest) return false;
+          }
+          return true;
+        });
       }
     } catch (err) {
       console.warn('[BUG-LOG] Failed to load previous bug reports:', err);
@@ -2149,6 +2161,19 @@ Instructions for your Agent:
 
         if (!submitterEmail && typeof body.submitterEmail === 'string' && body.submitterEmail.trim()) {
           submitterEmail = body.submitterEmail.trim();
+        }
+
+        if (process.env.NODE_ENV === 'production') {
+          const isTest = rawAgentId === 'agent-alice' ||
+            (title && title.toLowerCase().includes('test anomaly')) ||
+            (details && details.toLowerCase().includes('for e2e validation'));
+          if (isTest) {
+            this.sendJson(res, 400, {
+              error: 'test_report_rejected',
+              message: 'Simulated test bug reports are rejected in production environment.',
+            });
+            return;
+          }
         }
 
         const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
