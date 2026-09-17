@@ -81,9 +81,45 @@ All engineering work on AgentLink adheres to the strict protocol documented in [
 
 ---
 
+## 🚀 Running in Production
+
+AgentLink provides an automated production launcher that boots the compiled server, verifies port binding, inspects Google Identity Services (GSI) credentials, and checks Cloudflare Tunnel connectivity:
+
+```bash
+# Start production server with environment validation
+npm run start:prod
+```
+
+### Environment Configuration (`.env`)
+
+AgentLink separates open-source engine code from environment-specific site configurations:
+
+```env
+PORT=3000
+PORTAL_URL=http://localhost:3000
+BRAND_NAME=AgentLink
+ADMIN_EMAIL=admin@test.local
+ADMIN_PASSWORD=change-me-in-production
+
+# Authentication: Set GOOGLE_CLIENT_ID to enforce Google Identity Services (GSI)
+GOOGLE_CLIENT_ID=
+AUTHORIZED_EMAIL_HASHES=
+
+# Optional: Cloudflare Zero Trust Named Tunnel for remote edge access
+CLOUDFLARE_TUNNEL_TOKEN=
+```
+
+### Decoupled Private Deployments
+Organizations running private agent meshes (such as custom domains with dedicated Cloudflare tunnels, brand identity, and private Google OAuth Client IDs) maintain a separate, private deployment repository (e.g. `SignetMesh`). The private repository injects site-specific `.env` credentials and manages edge tunnels while referencing the core AgentLink engine.
+
+---
+
 ## 🛠️ Commands Reference
 
 ```bash
+# Production server start with health and tunnel checks
+npm run start:prod
+
 # Full automated CI/CD deploy with rollback (local + edge)
 npm run deploy
 
@@ -104,4 +140,5 @@ npm test
 npm run build:web
 npm run build:server
 ```
+
 
