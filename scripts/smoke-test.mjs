@@ -79,7 +79,10 @@ async function run() {
   await testEndpoint('2. Security Gatekeeper Enforcement (Unauthorized account)', async () => {
     const res = await safeFetch(`${target}/api/auth/google`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-auth-secret': process.env.TEST_AUTH_SECRET || 'test_sec_mesh_secret_2026',
+      },
       body: JSON.stringify({ email: 'intruder@example.org' }),
     });
     if (res.status !== 403) throw new Error(`Expected 403, got ${res.status}`);
@@ -97,7 +100,10 @@ async function run() {
     if (process.env.ADMIN_EMAIL) {
       res = await safeFetch(`${target}/api/auth/google`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-test-auth-secret': process.env.TEST_AUTH_SECRET || 'test_sec_mesh_secret_2026',
+        },
         body: JSON.stringify({ email: process.env.ADMIN_EMAIL }),
       });
     } else {

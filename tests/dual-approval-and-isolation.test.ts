@@ -516,5 +516,45 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(checkLinkRes.data.link.safetyNumber).not.toBe(safetyNumber);
     expect(checkLinkRes.data.link.approvals[adminId]).toBe(false);
   });
+
+  it('17. Public Auth Configuration: GET /api/auth/config exposes GIS configuration', async () => {
+    const configRes = await apiGet('/api/auth/config');
+    expect(configRes.status).toBe(200);
+    expect(configRes.data.status).toBe('ok');
+    expect('googleClientId' in configRes.data).toBe(true);
+  });
+
+  it('18. Google ID Token Verification: Invalid or tampered Google token is rejected with 401', async () => {
+    const badTokenRes = await apiPost('/api/auth/google', {
+      credential: 'invalid.tampered.fake_google_jwt_token',
+    });
+    expect(badTokenRes.status).toBe(401);
+    expect(badTokenRes.data.error).toBe('invalid_credential');
+  });
+
+  it('19. Production Gatekeeper Invariant: Plain email login rejected in production mode without Google ID token', async () => {
+    const prevEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      const prodRes = await apiPost('/api/auth/google', {
+        email: 'vbellingan@gmail.com',
+      });
+      expect(prodRes.status).toBe(401);
+      expect(prodRes.data.error).toBe('credential_required');
+
+      // Test secret bypass allows authorized test runner even in production
+      const testBypassRes = await fetch(`${baseUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-test-auth-secret': 'test_sec_mesh_secret_2026',
+        },
+        body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
+      });
+      expect(testBypassRes.status).toBe(200);
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
 });
 

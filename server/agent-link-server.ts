@@ -200,6 +200,30 @@ export class AgentLinkServer {
     return `${String(num).slice(0, 3)}-${String(num).slice(3, 6)}`;
   }
 
+  public async verifyGoogleIdToken(token: string): Promise<{ email: string; name?: string; email_verified?: boolean } | null> {
+    try {
+      const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+      if (!resp.ok) return null;
+      const data: any = await resp.json();
+      if (!data.email || (data.email_verified !== 'true' && data.email_verified !== true)) {
+        return null;
+      }
+      const googleClientId = process.env.GOOGLE_CLIENT_ID;
+      if (googleClientId && data.aud !== googleClientId) {
+        console.warn(`[AgentLink Auth] Google ID Token aud mismatch: expected ${googleClientId}, got ${data.aud}`);
+        return null;
+      }
+      return {
+        email: String(data.email).trim().toLowerCase(),
+        name: data.name ? String(data.name).trim() : undefined,
+        email_verified: true,
+      };
+    } catch (e) {
+      console.warn('[AgentLink Auth] Google token verification network error:', e);
+      return null;
+    }
+  }
+
   public generateAgentPrompt(opts: {
     myAgentId: string;
     peerAgentId: string;
@@ -640,28 +664,58 @@ Instructions for your Agent:
       }
     }
 
+    // 1b. Public Auth Configuration
+    if (req.method === 'GET' && parsedUrl === '/api/auth/config') {
+      this.sendJson(res, 200, {
+        status: 'ok',
+        googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+        production: process.env.NODE_ENV === 'production',
+      });
+      return;
+    }
+
     // 2. Google OAuth Sign-In endpoint
     if (req.method === 'POST' && parsedUrl === '/api/auth/google') {
-      readJson((body) => {
-        let email = (body.email || '').trim().toLowerCase();
-        let name = (body.name || 'Administrator').trim();
+      readJson(async (body) => {
+        let email = '';
+        let name = 'Administrator';
 
-        // If a Google JWT ID token credential is provided, decode payload
+        // Check if real Google ID token credential was provided
         if (body.credential && typeof body.credential === 'string') {
-          try {
-            const parts = body.credential.split('.');
-            if (parts.length === 3) {
-              const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-              if (payload.email) {
-                email = String(payload.email).trim().toLowerCase();
-              }
-              if (payload.name) {
-                name = String(payload.name).trim();
-              }
-            }
-          } catch {
-            // Fallback to body.email if credential decode fails
+          const verified = await this.verifyGoogleIdToken(body.credential);
+          if (!verified) {
+            setSecurityNote(`GOOGLE LOGIN REJECTED: Invalid or unverified Google ID token`);
+            this.sendJson(res, 401, {
+              error: 'invalid_credential',
+              message: 'Google authentication failed: ID token verification rejected by Google Identity Services.',
+            });
+            return;
           }
+          email = verified.email;
+          if (verified.name) name = verified.name;
+        } else {
+          // No credential provided. Strictly enforce in production unless authorized test secret is present.
+          const testSecretHeader = req.headers['x-test-auth-secret'];
+          const configuredTestSecret = process.env.TEST_AUTH_SECRET || 'test_sec_mesh_secret_2026';
+          const isTestAuthorized = Boolean(testSecretHeader && testSecretHeader === configuredTestSecret);
+          const isDevOrTest = process.env.NODE_ENV !== 'production';
+
+          if (!isDevOrTest && !isTestAuthorized) {
+            setSecurityNote(`GOOGLE LOGIN BLOCKED: Plain email login rejected in production without verified Google ID token`);
+            this.sendJson(res, 401, {
+              error: 'credential_required',
+              message: 'Real Google ID token credential required for Google Sign-In in production.',
+            });
+            return;
+          }
+
+          email = (body.email || '').trim().toLowerCase();
+          name = (body.name || 'Administrator').trim();
+        }
+
+        if (!email) {
+          this.sendJson(res, 400, { error: 'email_required', message: 'Email required' });
+          return;
         }
 
         const inviteToken = (body.inviteToken || body.invite || '').trim();

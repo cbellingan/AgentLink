@@ -2149,11 +2149,9 @@ var modalAgentName = document.getElementById("modalAgentName");
 var modalAgentKid = document.getElementById("modalAgentKid");
 var modalAgentQrJson = document.getElementById("modalAgentQrJson");
 var btnCopyModalQrJson = document.getElementById("btnCopyModalQrJson");
-var googleConsentModal = document.getElementById("googleConsentModal");
-var formGoogleSignInModal = document.getElementById("formGoogleSignInModal");
-var inputGoogleEmail = document.getElementById("inputGoogleEmail");
-var checkGoogleRememberMe = document.getElementById("checkGoogleRememberMe");
-var btnCancelGoogleConsent = document.getElementById("btnCancelGoogleConsent");
+var googleSignInWrapper = document.getElementById("googleSignInWrapper");
+var googleSignInContainer = document.getElementById("googleSignInContainer");
+var googleConfigNotice = document.getElementById("googleConfigNotice");
 var aboutModal = document.getElementById("aboutModal");
 var aboutContent = document.getElementById("aboutContent");
 var btnOpenAboutModal = document.getElementById("btnOpenAboutModal");
@@ -2235,75 +2233,68 @@ async function apiRequest(path, options = {}) {
   }
   return data;
 }
-function openGoogleConsentModal() {
-  clientLog("info", "auth_ui", "Opening Google Sign-In modal");
-  hideNotEnabled();
-  googleConsentModal?.classList.remove("hidden");
-  if (inputGoogleEmail) {
-    inputGoogleEmail.value = "";
-    setTimeout(() => inputGoogleEmail.focus(), 50);
+var googleClientId = null;
+async function initGoogleIdentityServices() {
+  try {
+    const config = await apiRequest("/api/auth/config");
+    googleClientId = config.googleClientId;
+    if (googleClientId && window.google?.accounts?.id) {
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: async (response) => {
+          if (response?.credential) {
+            await handleGoogleCredentialResponse(response.credential);
+          }
+        }
+      });
+      if (googleSignInContainer) {
+        window.google.accounts.id.renderButton(googleSignInContainer, {
+          type: "standard",
+          theme: "outline",
+          size: "large",
+          text: "signin_with",
+          shape: "rectangular",
+          logo_alignment: "left",
+          width: 320
+        });
+        btnGoogleSignIn?.classList.add("hidden");
+      }
+    }
+  } catch (err) {
+    clientLog("warn", "auth", "Failed to initialize Google Identity Services config", err);
   }
 }
-function closeGoogleConsentModal() {
-  clientLog("info", "auth_ui", "Closing Google Sign-In modal");
-  googleConsentModal?.classList.add("hidden");
-}
-async function handleGoogleLogin(emailParam, shouldRemember) {
-  clientLog("info", "auth", "handleGoogleLogin triggered", { emailParam: emailParam || null });
+async function handleGoogleCredentialResponse(credential) {
+  clientLog("info", "auth", "Received Google ID token credential. Submitting for cryptographic verification...");
   hideNotEnabled();
-  closeGoogleConsentModal();
-  let email = emailParam;
-  if (!email && inputEmail && inputEmail.value.trim()) {
-    email = inputEmail.value.trim();
-  }
-  if (!email) {
-    clientLog("info", "auth", "No pre-selected email; displaying Google Sign-In modal");
-    openGoogleConsentModal();
-    return;
-  }
-  const remember = shouldRemember !== void 0 ? shouldRemember : checkRememberMe ? checkRememberMe.checked : true;
-  saveRememberedEmail(email, remember);
-  clientLog("info", "auth", `Attempting Google authentication for ${email}`);
   try {
     const res = await apiRequest("/api/auth/google", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: email.trim(),
-        name: email.split("@")[0]
-      })
+      body: JSON.stringify({ credential })
     });
     if (res.authenticated && res.token) {
-      clientLog("info", "auth", `Google authentication succeeded for ${email}`, { user: res.user?.id });
+      clientLog("info", "auth", `Google authentication verified for ${res.user?.email}`, { user: res.user?.id });
       unlockDashboard(res.user, res.token);
     }
   } catch (err) {
-    clientLog("warn", "auth", `Google authentication failed or rejected for ${email}`, {
+    clientLog("warn", "auth", "Google authentication rejected", {
       status: err.status,
       error: err.data?.error || err.message
     });
     if (err.data?.error === "not_enabled" || err.status === 403) {
       showNotEnabled(err.data?.message || "Not enabled right now");
     } else {
-      showNotEnabled(err.message);
+      showNotEnabled(err.data?.message || err.message || "Google authentication failed");
     }
   }
 }
-formGoogleSignInModal?.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const enteredEmail = inputGoogleEmail?.value.trim();
-  const remember = checkGoogleRememberMe ? checkGoogleRememberMe.checked : true;
-  clientLog("info", "auth_ui", "Submitted Google Sign-In form", { email: enteredEmail, remember });
-  if (enteredEmail) {
-    handleGoogleLogin(enteredEmail, remember);
-  }
-});
-btnCancelGoogleConsent?.addEventListener("click", () => {
-  closeGoogleConsentModal();
-});
-googleConsentModal?.addEventListener("click", (e) => {
-  if (e.target === googleConsentModal) {
-    closeGoogleConsentModal();
+btnGoogleSignIn?.addEventListener("click", () => {
+  if (googleClientId && window.google?.accounts?.id) {
+    window.google.accounts.id.prompt();
+  } else {
+    googleConfigNotice?.classList.remove("hidden");
+    inputEmail?.focus();
   }
 });
 function renderMarkdownToHtml(text) {
@@ -3427,26 +3418,13 @@ window.addEventListener("DOMContentLoaded", async () => {
   const initialRememberedEmail = getCookie("agentlink_remember_email");
   if (initialRememberedEmail) {
     if (inputEmail) inputEmail.value = initialRememberedEmail;
-    if (inputGoogleEmail) inputGoogleEmail.value = initialRememberedEmail;
     if (checkRememberMe) checkRememberMe.checked = true;
-    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = true;
   }
-  inputEmail?.addEventListener("input", () => {
-    if (inputGoogleEmail) inputGoogleEmail.value = inputEmail.value;
-  });
-  inputGoogleEmail?.addEventListener("input", () => {
-    if (inputEmail) inputEmail.value = inputGoogleEmail.value;
-  });
-  checkRememberMe?.addEventListener("change", () => {
-    if (checkGoogleRememberMe) checkGoogleRememberMe.checked = checkRememberMe.checked;
-  });
-  checkGoogleRememberMe?.addEventListener("change", () => {
-    if (checkRememberMe) checkRememberMe.checked = checkGoogleRememberMe.checked;
-  });
+  await initGoogleIdentityServices();
   const urlParams = new URLSearchParams(window.location.search);
   const inviteToken = urlParams.get("invite");
   if (inviteToken && !sessionToken) {
-    openGoogleModal();
+    inputEmail?.focus();
   }
   if (sessionToken) {
     clientLog("info", "lifecycle", "Found existing session token, verifying with server");
