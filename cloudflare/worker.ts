@@ -16,11 +16,19 @@ const memoryState = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const adminEmailHash = env.ADMIN_EMAIL_HASH || '0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c';
+    const adminEmail = env.ADMIN_EMAIL || 'admin@test.local';
+    let adminEmailHash = env.ADMIN_EMAIL_HASH;
+    if (!adminEmailHash) {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(adminEmail.toLowerCase()));
+      adminEmailHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    const envHashes = (env.AUTHORIZED_EMAIL_HASHES || '')
+      .split(',')
+      .map((h: string) => h.trim().toLowerCase())
+      .filter(Boolean);
     const authorizedHashes = new Set([
       adminEmailHash,
-      // Authorized co-operator (obfuscated SHA-256)
-      '26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01',
+      ...envHashes,
     ]);
 
     const corsHeaders = {

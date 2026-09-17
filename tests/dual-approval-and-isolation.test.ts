@@ -537,7 +537,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     try {
       process.env.NODE_ENV = 'production';
       const prodRes = await apiPost('/api/auth/google', {
-        email: 'vbellingan@gmail.com',
+        email: 'user@example.com',
       });
       expect(prodRes.status).toBe(401);
       expect(prodRes.data.error).toBe('credential_required');

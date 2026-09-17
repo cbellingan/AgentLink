@@ -3,4 +3,5 @@ main = "worker.ts"
 compatibility_date = "2024-09-01"
 
 [vars]
-ADMIN_EMAIL_HASH = "0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c"
+# ADMIN_EMAIL_HASH = "..."
+# AUTHORIZED_EMAIL_HASHES = "..."

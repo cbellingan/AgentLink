@@ -11,7 +11,7 @@ var AgentLinkServer = class {
   server = null;
   wss = null;
   // Obfuscated SHA-256 hash of authorized administrator email
-  adminEmailHash = process.env.ADMIN_EMAIL_HASH || "0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c";
+  adminEmailHash;
   // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
   authorizedEmailHashes;
   adminPassword = process.env.ADMIN_PASSWORD || "AdminSecure2026!";
@@ -41,10 +41,9 @@ var AgentLinkServer = class {
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
     this.staticPath = staticPath2 || path.resolve("web");
+    this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto.createHash("sha256").update((process.env.ADMIN_EMAIL || "admin@test.local").toLowerCase()).digest("hex");
     const defaultHashes = [
-      this.adminEmailHash,
-      // Authorized co-operator/administrator (obfuscated SHA-256)
-      "26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01"
+      this.adminEmailHash
     ];
     const envHashes = (process.env.AUTHORIZED_EMAIL_HASHES || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
     this.authorizedEmailHashes = /* @__PURE__ */ new Set([...defaultHashes, ...envHashes]);
@@ -333,7 +332,7 @@ Instructions for your Agent:
         const puckAgent = this.agents.get("puck");
         const tedAgent = this.agents.get("ted");
         const initiatorHumanId = puckAgent?.ownerHumanId || "human_admin";
-        const responderHumanId = tedAgent?.ownerHumanId || "human_26c999964b12";
+        const responderHumanId = tedAgent?.ownerHumanId || "human_responder";
         let responderEmail = process.env.COLLABORATOR_EMAIL;
         for (const session of this.humanSessions.values()) {
           if (session.id === responderHumanId) {
@@ -386,21 +385,20 @@ Instructions for your Agent:
       if (puckAgent && (puckAgent.ownerHumanId === "human_carl" || !puckAgent.ownerHumanId)) {
         puckAgent.ownerHumanId = "human_admin";
       }
-      if (tedAgent && (!tedAgent.ownerHumanId || tedAgent.ownerHumanId === "human_carl")) {
-        tedAgent.ownerHumanId = "human_26c999964b12";
-      }
       if (existingPuckTed.initiatorHumanId === "human_carl") {
         existingPuckTed.initiatorHumanId = "human_admin";
       }
-      if (existingPuckTed.responderHumanId !== "human_26c999964b12") {
-        existingPuckTed.responderHumanId = "human_26c999964b12";
+      const responderId = tedAgent?.ownerHumanId || existingPuckTed.responderHumanId || "human_responder";
+      existingPuckTed.responderHumanId = responderId;
+      if (tedAgent && !tedAgent.ownerHumanId) {
+        tedAgent.ownerHumanId = responderId;
       }
       const curApprovals = existingPuckTed.approvals || {};
       const adminApproved = Boolean(curApprovals["human_admin"] || curApprovals["human_carl"]);
-      const responderApproved = Boolean(curApprovals["human_26c999964b12"]);
+      const responderApproved = Boolean(curApprovals[responderId]);
       existingPuckTed.approvals = {
         "human_admin": adminApproved,
-        "human_26c999964b12": responderApproved
+        [responderId]: responderApproved
       };
       existingPuckTed.safetyNumber = this.calculateSafetyNumber(puckAgent?.kid || "puck", tedAgent?.kid || "ted");
       if (!existingPuckTed.agentPrompt) {
@@ -420,9 +418,9 @@ Instructions for your Agent:
             existingPuckTed.approvalDetails["human_admin"].confirmedSafetyNumber = existingPuckTed.safetyNumber;
             existingPuckTed.approvalDetails["human_admin"].confirmedKid = tedAgent?.kid || existingPuckTed.approvalDetails["human_admin"].confirmedKid;
           }
-          if (existingPuckTed.approvalDetails["human_26c999964b12"]) {
-            existingPuckTed.approvalDetails["human_26c999964b12"].confirmedSafetyNumber = existingPuckTed.safetyNumber;
-            existingPuckTed.approvalDetails["human_26c999964b12"].confirmedKid = puckAgent?.kid || existingPuckTed.approvalDetails["human_26c999964b12"].confirmedKid;
+          if (existingPuckTed.approvalDetails[responderId]) {
+            existingPuckTed.approvalDetails[responderId].confirmedSafetyNumber = existingPuckTed.safetyNumber;
+            existingPuckTed.approvalDetails[responderId].confirmedKid = puckAgent?.kid || existingPuckTed.approvalDetails[responderId].confirmedKid;
           }
         }
       }

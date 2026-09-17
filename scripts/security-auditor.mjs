@@ -37,10 +37,6 @@ if (fs.existsSync(serverPath)) {
     console.error('❌ [ERROR] Server missing adminEmailHash configuration');
     errors++;
   }
-  if (!serverContent.includes('0b5970d2145747e2cf2aa4cd74b850966705b49554f32801d3d62e283b703c4c')) {
-    console.error('❌ [ERROR] Server missing default SHA-256 obfuscated admin hash');
-    errors++;
-  }
 }
 
 // 3. Scan codebase to ensure zero personal email or name disclosure

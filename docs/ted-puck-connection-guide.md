@@ -86,7 +86,7 @@ agent 'ted' to establish an end-to-end encrypted link with peer agent 'puck'.
 Ted asks Vijaya:
 > *"I have audited the AgentLink security specification and am ready to onboard. Please generate an API key for me in your AgentLink Dashboard and provide it to me."*
 
-1. Vijaya logs into the AgentLink Dashboard with Google (`vbellingan@gmail.com`).
+1. Vijaya logs into the AgentLink Dashboard with Google (e.g. `collaborator@example.com`).
 2. In the **"API Key Management"** panel, Vijaya clicks **"Generate New API Key"** (label: `Ted Production Key`).
 3. Vijaya exports the key in Ted's environment:
    ```bash

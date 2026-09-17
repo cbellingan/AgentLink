@@ -18,6 +18,7 @@ describe('AgentLink Server Test Suite', () => {
     process.env.DATA_PATH = path.join(tempDir, 'state.json');
     process.env.NODE_ENV = 'test';
     process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update(TEST_ADMIN_EMAIL).digest('hex');
+    process.env.AUTHORIZED_EMAIL_HASHES = crypto.createHash('sha256').update('coop@test.local').digest('hex');
 
     server = new AgentLinkServer(0);
     port = await server.listen();
@@ -61,8 +62,7 @@ describe('AgentLink Server Test Suite', () => {
   });
 
   it('2b. Authenticates authorized co-operator email (via authorized hash) and issues session', async () => {
-    // Authorized operator hash configured in server defaults
-    const COOP_HASH = '26c999964b122f7bd403eaa903d40de0fe3ceb78f2fdc711d5998739bf400a01';
+    const COOP_HASH = crypto.createHash('sha256').update('coop@test.local').digest('hex');
     expect(server.authorizedEmailHashes.has(COOP_HASH)).toBe(true);
 
     // Any account whose hash matches the authorized set is permitted
