@@ -224,6 +224,18 @@ export class AgentLinkServer {
     }
   }
 
+  public get portalUrl(): string {
+    return process.env.PORTAL_URL || `http://localhost:${this.port}`;
+  }
+
+  public get brandName(): string {
+    return process.env.BRAND_NAME || 'AgentLink';
+  }
+
+  public get adminEmail(): string {
+    return process.env.ADMIN_EMAIL || 'admin@test.local';
+  }
+
   public generateAgentPrompt(opts: {
     myAgentId: string;
     peerAgentId: string;
@@ -232,10 +244,12 @@ export class AgentLinkServer {
     note?: string;
     portalUrl?: string;
     onboardingUrl?: string;
+    brandName?: string;
   }): string {
-    const portal = opts.portalUrl || 'https://agent.signetmesh.com';
+    const portal = opts.portalUrl || this.portalUrl;
+    const brand = opts.brandName || this.brandName;
     const onboardingUrl = opts.onboardingUrl || `${portal}/onboarding.md`;
-    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on SignetMesh (${portal}).
+    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on ${brand} (${portal}).
 
 📖 Onboarding & Security Spec: ${onboardingUrl}
 - Peer Agent ID: ${opts.peerAgentId}
@@ -382,7 +396,7 @@ Instructions for your Agent:
           peerKid: puckAgent?.kid,
           safetyNumber,
           note: 'Cross-account agent link requested between Puck and Ted awaiting dual human approval.',
-          portalUrl: 'https://agent.signetmesh.com',
+          portalUrl: this.portalUrl,
         });
 
         this.links.set(linkId, {
@@ -391,7 +405,7 @@ Instructions for your Agent:
           agentBId: 'ted',
           initiatorHumanId,
           responderHumanId,
-          initiatorHumanEmail: 'admin@signetmesh.com',
+          initiatorHumanEmail: this.adminEmail,
           responderHumanEmail: responderEmail,
           status: 'pending_approval',
           createdAt: new Date().toISOString(),
@@ -441,7 +455,7 @@ Instructions for your Agent:
           peerKid: puckAgent?.kid,
           safetyNumber: existingPuckTed.safetyNumber,
           note: existingPuckTed.note,
-          portalUrl: 'https://agent.signetmesh.com',
+          portalUrl: this.portalUrl,
         });
       }
       if (adminApproved && responderApproved) {
@@ -636,10 +650,12 @@ Instructions for your Agent:
     // 1. Server info endpoint
     if (req.method === 'GET' && parsedUrl === '/api/server-info') {
       this.sendJson(res, 200, {
-        name: 'AgentLink Zero-Knowledge Relay',
+        name: `${this.brandName} Zero-Knowledge Relay`,
         version: '1.0.0',
         adminConfigured: true,
         port: this.port,
+        portalUrl: this.portalUrl,
+        brandName: this.brandName,
       });
       return;
     }
@@ -670,6 +686,8 @@ Instructions for your Agent:
         status: 'ok',
         googleClientId: process.env.GOOGLE_CLIENT_ID || null,
         production: process.env.NODE_ENV === 'production',
+        portalUrl: this.portalUrl,
+        brandName: this.brandName,
       });
       return;
     }
@@ -790,7 +808,7 @@ Instructions for your Agent:
         const user: HumanUser = {
           id: userHumanId,
           name: isAdmin ? 'Administrator' : email.split('@')[0],
-          email: email || 'admin@signetmesh.com',
+          email: email || this.adminEmail,
           avatar: isAdmin ? '👑' : '✨',
           role: 'admin',
         };
@@ -1015,7 +1033,7 @@ Instructions for your Agent:
         }
 
         const inviterHumanId = human ? human.id : (apiKeyRecord!.ownerHumanId || 'human_admin');
-        let inviterEmail = human ? human.email : 'admin@signetmesh.com';
+        let inviterEmail = human ? human.email : this.adminEmail;
         let inviterName = human ? (human.name || human.email) : undefined;
 
         if (!human && apiKeyRecord) {
@@ -1263,7 +1281,7 @@ Instructions for your Agent:
                 peerKid: a.kid,
                 safetyNumber: link.safetyNumber,
                 note: link.note,
-                portalUrl: 'https://agent.signetmesh.com',
+                portalUrl: this.portalUrl,
               });
 
               // Security Invariant: If key rotation alters the mutual safety number,

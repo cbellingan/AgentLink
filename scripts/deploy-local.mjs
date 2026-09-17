@@ -303,20 +303,27 @@ async function main() {
       execSync('node scripts/smoke-test.mjs http://localhost:3000', { stdio: 'inherit' });
     });
 
-    // 7. Cloudflare Tunnel Health & Edge Routing
-    step('7. Cloudflare Tunnel Health & Edge Routing Verification', () => {
-      checkOrStartTunnel();
-    });
+    // 7. Cloudflare Tunnel Health & Edge Routing (if configured)
+    const portalUrl = process.env.PORTAL_URL || '';
+    const isRemoteEdge = portalUrl.startsWith('https://');
 
-    // 8. Tier 2 Public Edge Verification
-    step('8. Tier 2 Public Edge Verification (https://agent.signetmesh.com)', () => {
-      console.log('   Running synthetic smoke tests through Cloudflare Edge (https://agent.signetmesh.com)...');
-      execSync('node scripts/smoke-test.mjs https://agent.signetmesh.com', { stdio: 'inherit' });
-    });
+    if (isRemoteEdge) {
+      step('7. Cloudflare Tunnel Health & Edge Routing Verification', () => {
+        checkOrStartTunnel();
+      });
+
+      // 8. Tier 2 Public Edge Verification
+      step(`8. Tier 2 Public Edge Verification (${portalUrl})`, () => {
+        console.log(`   Running synthetic smoke tests through Edge (${portalUrl})...`);
+        execSync(`node scripts/smoke-test.mjs ${portalUrl}`, { stdio: 'inherit' });
+      });
+    } else {
+      console.log('ℹ️  Skipping Tier 2 Public Edge Verification (PORTAL_URL is local or not configured)');
+    }
 
     console.log('🎉 ========================================================');
-    console.log('🎉 CI/CD PIPELINE & DUAL-TIER VERIFICATION SUCCEEDED!');
-    console.log('🎉 New build deployed and verified healthy on localhost:3000 and agent.signetmesh.com.');
+    console.log('🎉 CI/CD PIPELINE & VERIFICATION SUCCEEDED!');
+    console.log(`🎉 New build deployed and verified healthy on localhost:3000${isRemoteEdge ? ` and ${portalUrl}` : ''}.`);
     console.log('🎉 ========================================================');
 
   } catch (error) {

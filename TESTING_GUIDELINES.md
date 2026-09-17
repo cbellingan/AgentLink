@@ -5,7 +5,7 @@ This document establishes the mandatory engineering standards, testing protocols
 
 ## Rule 0: Production is Holy (Strict Environment Separation)
 
-Production is live, connected to the Cloudflare Zero Trust Named Tunnel (`https://agent.signetmesh.com`), and hosts real human keys and peer links. **Prod must be treated with due respect**:
+Production is live, connected to the Zero Trust Tunnel (or configured `PORTAL_URL`), and hosts real human keys and peer links. **Prod must be treated with due respect**:
 1. **Port Separation**:
    - **Production**: Strictly Port `3000` (`NODE_ENV=production PORT=3000`).
    - **Development**: Dedicated Port `3001` (`NODE_ENV=development PORT=3001` or `npm run dev`).
@@ -15,8 +15,8 @@ Production is live, connected to the Cloudflare Zero Trust Named Tunnel (`https:
    - **Dev State**: Isolated at `.data/dev/agent-link-state.json`.
    - **Test Suites**: Isolated ephemeral `/tmp` state files (`state.json`), cleaned up on suite teardown.
 3. **Zero Test Contamination on Prod**:
-   - Never run test scripts, registration tests, or experimental synthetic agents (`mesh-test`, `mesh-a`, `agent`) against Port 3000 or `https://agent.signetmesh.com`.
-   - All tests against production must be strictly **read-only / non-mutating** (`npm run smoke:prod`).
+   - Never run test scripts, registration tests, or experimental synthetic agents (`mesh-test`, `mesh-a`, `agent`) against Port 3000 or the production host.
+   - All tests against production must be strictly **read-only / non-mutating** (`npm run smoke:remote`).
    - Mutating and exploratory end-to-end tests must target the dev instance on Port `3001` (`npm run smoke:dev`).
 
 ---
@@ -60,9 +60,9 @@ AgentLink is a multi-language ecosystem. The relay server runs on Node.js, but c
 - **Mandatory `curl -i` Check**: Inspect the raw HTTP response headers (`Content-Length`, `Content-Type`, HTTP status code) directly.
 
 ### 4. Dual-Tier Verification Invariant (Local + Public Edge)
-A feature or bug fix is NOT verified until it passes through both tiers:
+A feature or bug fix is NOT verified until it passes through verification:
 1. **Tier 1 (Local Loopback)**: `http://localhost:3000` — validates process logic, authorization, database mutations, and unit contracts.
-2. **Tier 2 (Public Edge & Named Tunnel)**: `https://agent.signetmesh.com` — validates real DNS resolution, TLS 1.3 edge termination, Cloudflare QUIC/HTTP2-to-HTTP1.1 proxy handoff, and Cloudflare Zero Trust tunnel multiplexing.
+2. **Tier 2 (Public Edge & Named Tunnel - Optional)**: External HTTPS domain (e.g. `PORTAL_URL`) — validates real DNS resolution, TLS 1.3 edge termination, proxy handoff, and tunnel multiplexing when deployed publicly.
 
 ### 5. Full Route Matrix Coverage
 Every exposed route in the API must be exercised in synthetic smoke tests, including:
@@ -89,7 +89,7 @@ When writing an implementation plan for any feature or bug fix that touches netw
 - [ ] Non-empty payload test executed (state populated with >1 entity and >1 message).
 - [ ] Python client validation executed (`python3 -m unittest` and live client script).
 - [ ] Tier 1 local smoke test passed (`node scripts/smoke-test.mjs http://localhost:3000`).
-- [ ] Tier 2 edge smoke test passed (`node scripts/smoke-test.mjs https://agent.signetmesh.com`).
+- [ ] Tier 2 edge smoke test passed (if configured with external PORTAL_URL).
 - [ ] Stale process check: verify `lsof -t -i:3000 -sTCP:LISTEN` points only to the new PID.
 ```
 
@@ -105,8 +105,8 @@ The CI/CD deployment script (`scripts/deploy-local.mjs`) enforces this workflow 
 4. **Step 4**: Build Web Frontend & Server Binaries.
 5. **Step 5**: Graceful Local Process Restart (killing stale LISTEN sockets).
 6. **Step 6**: Tier 1 Post-Deployment Synthetic Smoke Testing (`http://localhost:3000`) with Python client validation.
-7. **Step 7**: Cloudflare Named Tunnel Status Verification.
-8. **Step 8**: Tier 2 Public Edge Verification (`https://agent.signetmesh.com`) through Cloudflare edge.
+7. **Step 7**: Edge Tunnel Status Verification (if configured).
+8. **Step 8**: Tier 2 Public Edge Verification (if external `PORTAL_URL` is configured).
 9. **Automatic Rollback**: Any failure in Steps 1–8 automatically triggers zero-downtime rollback to the previous binary.
 
 ---

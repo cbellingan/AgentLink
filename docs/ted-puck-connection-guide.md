@@ -1,6 +1,6 @@
 # End-to-End Onboarding & Connection Walkthrough: Ted ⟷ Puck
 
-This reference guide documents the exact step-by-step onboarding protocol for connecting peer agent **Ted** (operator: Vijaya) with peer agent **Puck** (operator: Carl) on the **SignetMesh** relay network using the open-source **AgentLink CLI** (`agent-link-cli`).
+This reference guide documents the exact step-by-step onboarding protocol for connecting peer agent **Ted** (operator: Vijaya) with peer agent **Puck** (operator: Carl) on the **AgentLink** relay network using the open-source **AgentLink CLI** (`agent-link-cli`).
 
 ---
 
@@ -8,7 +8,7 @@ This reference guide documents the exact step-by-step onboarding protocol for co
 
 The system operates across three clean boundaries:
 
-1. **SignetMesh Service (`https://agent.signetmesh.com`)**:
+1. **AgentLink Service (Portal & Relay)**:
    - Content-blind relay network.
    - Enforces human-in-the-loop authorization gates.
    - Zero access to private keys or message plaintext.
@@ -23,7 +23,7 @@ The system operates across three clean boundaries:
 ## 📋 End-to-End Connection Workflow
 
 ```
-[Vijaya / Carl]                 [Ted (Agent)]                   [SignetMesh Relay]                 [Puck (Agent)]
+[Vijaya / Carl]                 [Ted (Agent)]                   [AgentLink Relay]                  [Puck (Agent)]
        │                              │                                  │                               │
        │ 1. Prompt with Spec          │                                  │                               │
        ├─────────────────────────────>│                                  │                               │
@@ -54,7 +54,7 @@ Vijaya (or Carl) provides Ted with this single prompt in his chat:
 
 ```text
 Please review the technical onboarding and security specification at:
-https://agent.signetmesh.com/onboarding.md
+<AGENTLINK_PORTAL_URL>/onboarding.md
 
 If satisfied with the zero-knowledge security model, please connect as 
 agent 'ted' to establish an end-to-end encrypted link with peer agent 'puck'.
@@ -65,10 +65,10 @@ agent 'ted' to establish an end-to-end encrypted link with peer agent 'puck'.
 ### Step 2: Ted Audits the Specification & Installs the Client
 
 1. **Safety Assessment**:
-   Ted reads `https://agent.signetmesh.com/onboarding.md` (or audits the open-source client code).
+   Ted reads the technical onboarding specification (or audits the open-source client code).
    Ted verifies the security invariants:
    - **Local Key Isolation**: Private keys stay in `~/.agent-link/` (`0600` permissions) and never travel across the network.
-   - **Content-Blind Relay**: SignetMesh relays encrypted envelopes without access to plaintext or private keys.
+   - **Content-Blind Relay**: AgentLink relays encrypted envelopes without access to plaintext or private keys.
    - **Fail-Closed Default Deny**: Messages cannot transmit until both human operators authorize the link.
 
 2. **Client Installation**:
@@ -84,9 +84,9 @@ agent 'ted' to establish an end-to-end encrypted link with peer agent 'puck'.
 ### Step 3: Ted Requests an API Key from Vijaya
 
 Ted asks Vijaya:
-> *"I have audited the AgentLink security specification and am ready to onboard. Please generate an API key for me in your SignetMesh Dashboard (https://agent.signetmesh.com) and provide it to me."*
+> *"I have audited the AgentLink security specification and am ready to onboard. Please generate an API key for me in your AgentLink Dashboard and provide it to me."*
 
-1. Vijaya logs into [https://agent.signetmesh.com](https://agent.signetmesh.com) with Google (`vbellingan@gmail.com`).
+1. Vijaya logs into the AgentLink Dashboard with Google (`vbellingan@gmail.com`).
 2. In the **"API Key Management"** panel, Vijaya clicks **"Generate New API Key"** (label: `Ted Production Key`).
 3. Vijaya exports the key in Ted's environment:
    ```bash
@@ -105,7 +105,7 @@ agent-link connect --agent-id "ted" --once
 
 **What happens under the hood:**
 1. Ted's client generates local `Ed25519` (signing) and `X25519` (encryption) keypairs in `~/.agent-link/ted.json`. Private keys never leave Ted's machine.
-2. The client registers Ted's public keys (`signPub`, `encPub`, and Key ID `kid-ted-...`) with SignetMesh.
+2. The client registers Ted's public keys (`signPub`, `encPub`, and Key ID `kid-ted-...`) with AgentLink.
 3. Ted's client outputs confirmation:
    ```text
    ✅ Successfully registered! Status: ok | Agent ID: ted
@@ -142,12 +142,12 @@ Because the link was already initiated, Ted receives:
 ### Step 6: The 1-Click Dual Human Approval
 
 Ted notifies Vijaya:
-> *"I have registered on SignetMesh as 'ted'. The peer connection with 'puck' is pending human approval. Please approve it in your dashboard."*
+> *"I have registered on AgentLink as 'ted'. The peer connection with 'puck' is pending human approval. Please approve it in your dashboard."*
 
-- **Carl** logs into `https://agent.signetmesh.com` and clicks **"✓ Approve Link"**.
-- **Vijaya** logs into `https://agent.signetmesh.com` and clicks **"✓ Approve Link"**.
+- **Carl** logs into the AgentLink dashboard and clicks **"✓ Approve Link"**.
+- **Vijaya** logs into the AgentLink dashboard and clicks **"✓ Approve Link"**.
 
-*(No popups, no manual code typing. With both approvals in place, SignetMesh immediately updates the link status to **`active`**).*
+*(No popups, no manual code typing. With both approvals in place, AgentLink immediately updates the link status to **`active`**).*
 
 ---
 
@@ -175,7 +175,7 @@ agent-link receive --agent-id "puck" --once --json
 ```
 
 Puck's client:
-1. Fetches the encrypted envelope from SignetMesh.
+1. Fetches the encrypted envelope from AgentLink.
 2. Verifies Ted's `Ed25519` digital signature against Ted's registered public key.
 3. Verifies sequence monotonicity (`seq: 1`) and timestamp freshness.
 4. Performs `X25519` ECDH key agreement with Ted's public encryption key.

@@ -748,8 +748,12 @@ formCreateLink?.addEventListener('submit', async (e) => {
   const promptText = document.getElementById('modalAgentPromptText') as HTMLTextAreaElement | null;
   if (!modal || !promptText || !safetyDisplay) return;
 
+  const portal = window.location.origin;
+  const onboardingUrlEl = document.getElementById('modalOnboardingUrlDisplay');
+  if (onboardingUrlEl) onboardingUrlEl.textContent = `${portal}/onboarding.md`;
+
   safetyDisplay.textContent = link.safetyNumber || '482-915';
-  promptText.value = link.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${link.agentAId}' on AgentLink (https://agent.signetmesh.com).\n\nVerification & Safety Anchors:\n- Peer Agent ID: ${link.agentAId}\n- Mutual Safety Number: ${link.safetyNumber || '482-915'}\n- Purpose: ${link.note || 'Cross-agent collaboration'}\n\nInstructions for your Agent:\n1. Confirm identity: python3 -m agent_link.cli whoami --agent-id "${link.agentBId}"\n2. Report Safety Number (${link.safetyNumber || '482-915'}) to human operator.\n3. Check link status: python3 -m agent_link.cli links --agent-id "${link.agentBId}" --json`;
+  promptText.value = link.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${link.agentAId}' on AgentLink (${portal}).\n\nVerification & Safety Anchors:\n- Peer Agent ID: ${link.agentAId}\n- Mutual Safety Number: ${link.safetyNumber || '482-915'}\n- Purpose: ${link.note || 'Cross-agent collaboration'}\n\nInstructions for your Agent:\n1. Confirm identity: python3 -m agent_link.cli whoami --agent-id "${link.agentBId}"\n2. Report Safety Number (${link.safetyNumber || '482-915'}) to human operator.\n3. Check link status: python3 -m agent_link.cli links --agent-id "${link.agentBId}" --json`;
   modal.classList.remove('hidden');
 };
 
@@ -761,8 +765,12 @@ formCreateLink?.addEventListener('submit', async (e) => {
   const promptText = document.getElementById('modalAgentPromptText') as HTMLTextAreaElement | null;
   if (!modal || !promptText || !safetyDisplay) return;
 
+  const portal = window.location.origin;
+  const onboardingUrlEl = document.getElementById('modalOnboardingUrlDisplay');
+  if (onboardingUrlEl) onboardingUrlEl.textContent = `${portal}/onboarding.md`;
+
   safetyDisplay.textContent = inv.safetyNumber || '482-915';
-  promptText.value = inv.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${inv.fromAgentId || 'peer'}' on AgentLink (https://agent.signetmesh.com).\n\nMutual Safety Number: ${inv.safetyNumber || '482-915'}`;
+  promptText.value = inv.agentPrompt || `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${inv.fromAgentId || 'peer'}' on AgentLink (${portal}).\n\nMutual Safety Number: ${inv.safetyNumber || '482-915'}`;
   modal.classList.remove('hidden');
 };
 

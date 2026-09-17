@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-const TEST_ADMIN_EMAIL = 'admin@signetmesh.local';
+const TEST_ADMIN_EMAIL = 'admin@test.local';
 
 describe('AgentLink Server Test Suite', () => {
   let server: AgentLinkServer;

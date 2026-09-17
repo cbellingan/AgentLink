@@ -2,7 +2,7 @@ import { AgentLinkServer } from './agent-link-server.js';
 import path from 'node:path';
 
 // Environment-driven port allocation:
-// Production (Holy): 3000 (connected to Cloudflare Tunnel agent.signetmesh.com)
+// Default: 3000 (standard portal port)
 // Development / Test: 3001
 const defaultPort = (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') ? 3001 : 3000;
 const port = parseInt(process.env.PORT || String(defaultPort), 10);

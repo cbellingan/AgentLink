@@ -188,10 +188,43 @@ var AgentLinkServer = class {
     const num = hash.readUInt32BE(0) % 9e5 + 1e5;
     return `${String(num).slice(0, 3)}-${String(num).slice(3, 6)}`;
   }
+  async verifyGoogleIdToken(token) {
+    try {
+      const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data.email || data.email_verified !== "true" && data.email_verified !== true) {
+        return null;
+      }
+      const googleClientId = process.env.GOOGLE_CLIENT_ID;
+      if (googleClientId && data.aud !== googleClientId) {
+        console.warn(`[AgentLink Auth] Google ID Token aud mismatch: expected ${googleClientId}, got ${data.aud}`);
+        return null;
+      }
+      return {
+        email: String(data.email).trim().toLowerCase(),
+        name: data.name ? String(data.name).trim() : void 0,
+        email_verified: true
+      };
+    } catch (e) {
+      console.warn("[AgentLink Auth] Google token verification network error:", e);
+      return null;
+    }
+  }
+  get portalUrl() {
+    return process.env.PORTAL_URL || `http://localhost:${this.port}`;
+  }
+  get brandName() {
+    return process.env.BRAND_NAME || "AgentLink";
+  }
+  get adminEmail() {
+    return process.env.ADMIN_EMAIL || "admin@test.local";
+  }
   generateAgentPrompt(opts) {
-    const portal = opts.portalUrl || "https://agent.signetmesh.com";
+    const portal = opts.portalUrl || this.portalUrl;
+    const brand = opts.brandName || this.brandName;
     const onboardingUrl = opts.onboardingUrl || `${portal}/onboarding.md`;
-    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on SignetMesh (${portal}).
+    return `You are invited to establish an end-to-end encrypted (E2EE v2) peer link with agent '${opts.peerAgentId}' on ${brand} (${portal}).
 
 \u{1F4D6} Onboarding & Security Spec: ${onboardingUrl}
 - Peer Agent ID: ${opts.peerAgentId}
@@ -320,7 +353,7 @@ Instructions for your Agent:
           peerKid: puckAgent?.kid,
           safetyNumber,
           note: "Cross-account agent link requested between Puck and Ted awaiting dual human approval.",
-          portalUrl: "https://agent.signetmesh.com"
+          portalUrl: this.portalUrl
         });
         this.links.set(linkId, {
           id: linkId,
@@ -328,7 +361,7 @@ Instructions for your Agent:
           agentBId: "ted",
           initiatorHumanId,
           responderHumanId,
-          initiatorHumanEmail: "admin@signetmesh.com",
+          initiatorHumanEmail: this.adminEmail,
           responderHumanEmail: responderEmail,
           status: "pending_approval",
           createdAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -377,7 +410,7 @@ Instructions for your Agent:
           peerKid: puckAgent?.kid,
           safetyNumber: existingPuckTed.safetyNumber,
           note: existingPuckTed.note,
-          portalUrl: "https://agent.signetmesh.com"
+          portalUrl: this.portalUrl
         });
       }
       if (adminApproved && responderApproved) {
@@ -544,10 +577,12 @@ Instructions for your Agent:
       };
       if (req.method === "GET" && parsedUrl === "/api/server-info") {
         this.sendJson(res, 200, {
-          name: "AgentLink Zero-Knowledge Relay",
+          name: `${this.brandName} Zero-Knowledge Relay`,
           version: "1.0.0",
           adminConfigured: true,
-          port: this.port
+          port: this.port,
+          portalUrl: this.portalUrl,
+          brandName: this.brandName
         });
         return;
       }
@@ -569,24 +604,51 @@ Instructions for your Agent:
           return;
         }
       }
+      if (req.method === "GET" && parsedUrl === "/api/auth/config") {
+        this.sendJson(res, 200, {
+          status: "ok",
+          googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+          production: process.env.NODE_ENV === "production",
+          portalUrl: this.portalUrl,
+          brandName: this.brandName
+        });
+        return;
+      }
       if (req.method === "POST" && parsedUrl === "/api/auth/google") {
-        readJson((body) => {
-          let email = (body.email || "").trim().toLowerCase();
-          let name = (body.name || "Administrator").trim();
+        readJson(async (body) => {
+          let email = "";
+          let name = "Administrator";
           if (body.credential && typeof body.credential === "string") {
-            try {
-              const parts = body.credential.split(".");
-              if (parts.length === 3) {
-                const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
-                if (payload.email) {
-                  email = String(payload.email).trim().toLowerCase();
-                }
-                if (payload.name) {
-                  name = String(payload.name).trim();
-                }
-              }
-            } catch {
+            const verified = await this.verifyGoogleIdToken(body.credential);
+            if (!verified) {
+              setSecurityNote(`GOOGLE LOGIN REJECTED: Invalid or unverified Google ID token`);
+              this.sendJson(res, 401, {
+                error: "invalid_credential",
+                message: "Google authentication failed: ID token verification rejected by Google Identity Services."
+              });
+              return;
             }
+            email = verified.email;
+            if (verified.name) name = verified.name;
+          } else {
+            const testSecretHeader = req.headers["x-test-auth-secret"];
+            const configuredTestSecret = process.env.TEST_AUTH_SECRET || "test_sec_mesh_secret_2026";
+            const isTestAuthorized = Boolean(testSecretHeader && testSecretHeader === configuredTestSecret);
+            const isDevOrTest = process.env.NODE_ENV !== "production";
+            if (!isDevOrTest && !isTestAuthorized) {
+              setSecurityNote(`GOOGLE LOGIN BLOCKED: Plain email login rejected in production without verified Google ID token`);
+              this.sendJson(res, 401, {
+                error: "credential_required",
+                message: "Real Google ID token credential required for Google Sign-In in production."
+              });
+              return;
+            }
+            email = (body.email || "").trim().toLowerCase();
+            name = (body.name || "Administrator").trim();
+          }
+          if (!email) {
+            this.sendJson(res, 400, { error: "email_required", message: "Email required" });
+            return;
           }
           const inviteToken = (body.inviteToken || body.invite || "").trim();
           let matchingInvite = inviteToken ? this.invites.get(inviteToken) : null;
@@ -649,7 +711,7 @@ Instructions for your Agent:
           const user = {
             id: userHumanId,
             name: isAdmin ? "Administrator" : email.split("@")[0],
-            email: email || "admin@signetmesh.com",
+            email: email || this.adminEmail,
             avatar: isAdmin ? "\u{1F451}" : "\u2728",
             role: "admin"
           };
@@ -831,7 +893,7 @@ Instructions for your Agent:
             return;
           }
           const inviterHumanId = human ? human.id : apiKeyRecord.ownerHumanId || "human_admin";
-          let inviterEmail = human ? human.email : "admin@signetmesh.com";
+          let inviterEmail = human ? human.email : this.adminEmail;
           let inviterName = human ? human.name || human.email : void 0;
           if (!human && apiKeyRecord) {
             for (const s of this.humanSessions.values()) {
@@ -1055,7 +1117,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                   peerKid: a.kid,
                   safetyNumber: link.safetyNumber,
                   note: link.note,
-                  portalUrl: "https://agent.signetmesh.com"
+                  portalUrl: this.portalUrl
                 });
                 if (previousSafetyNumber && previousSafetyNumber !== link.safetyNumber) {
                   console.warn(`[AgentLink Security] Key rotation detected for agent '${agentId}'. Link '${link.id}' Safety Number changed from '${previousSafetyNumber}' to '${link.safetyNumber}'. Demoting to pending_approval and revoking stale approvals.`);

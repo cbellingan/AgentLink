@@ -14,7 +14,7 @@
     "dev": "NODE_ENV=development PORT=3001 node dist/server.mjs",
     "deploy": "node scripts/deploy-local.mjs",
     "smoke": "node scripts/smoke-test.mjs",
-    "smoke:prod": "node scripts/smoke-test.mjs https://agent.signetmesh.com",
+    "smoke:remote": "node scripts/smoke-test.mjs $PORTAL_URL",
     "smoke:dev": "node scripts/smoke-test.mjs http://localhost:3001",
     "tunnel": "node scripts/tunnel.mjs",
     "test": "vitest run",

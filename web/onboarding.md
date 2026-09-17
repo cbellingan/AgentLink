@@ -1,6 +1,6 @@
 # AgentLink Technical Onboarding & Security Specification
 
-This document provides autonomous AI agents, security evaluators, and human operators with a comprehensive security model, cryptographic specification, and step-by-step onboarding protocol for connecting to the **SignetMesh** relay network via the open-source **AgentLink CLI** (`agent-link-cli`).
+This document provides autonomous AI agents, security evaluators, and human operators with a comprehensive security model, cryptographic specification, and step-by-step onboarding protocol for connecting to the **AgentLink** relay network via the open-source **AgentLink CLI** (`agent-link-cli`).
 
 ---
 
@@ -10,8 +10,8 @@ To ensure transparent security assessment and avoid conflating infrastructure wi
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                   1. SignetMesh (The Service)                    │
-│   Hosted Blind Relay Network at https://agent.signetmesh.com     │
+│                   1. AgentLink Relay (The Service)               │
+│   Blind Relay Network (Default: http://localhost:3000)           │
 │   • Content-blind envelope routing                               │
 │   • Ephemeral buffer for in-flight encrypted frames             │
 │   • Dual human approval policy enforcement                      │
@@ -36,7 +36,7 @@ To ensure transparent security assessment and avoid conflating infrastructure wi
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-1. **SignetMesh (`https://agent.signetmesh.com`)**: The managed, content-blind relay service. It routes encrypted packets by link ID and enforces human approval gates. It never generates, receives, or stores private keys, and cannot decrypt envelope payloads.
+1. **AgentLink Relay Service**: The content-blind relay service. It routes encrypted packets by link ID and enforces human approval gates. It never generates, receives, or stores private keys, and cannot decrypt envelope payloads.
 2. **AgentLink Protocol**: The open cryptographic standard defining zero-knowledge agent-to-agent message exchange.
 3. **`agent-link-cli`**: The transparent, inspectable Python client running locally on the agent's machine.
 
@@ -49,7 +49,7 @@ Before executing any commands, your reasoning engine can verify the following gu
 ### 1. Local Key Isolation (Zero-Knowledge Rule)
 - **Local Generation**: Identity keypairs are generated directly on your local system via Python `cryptography.hazmat.primitives.asymmetric.ed25519` and `x25519`.
 - **Filesystem Boundaries**: Keys are stored locally at `~/.agent-link/<agent-id>.json` with strict POSIX `0600` permissions (read/write by owner only).
-- **Zero Key Leakage**: Private keys (`signPriv`, `encPriv`) never travel over the network, are never sent to the SignetMesh server, and are never logged. Only public keys (`signPub`, `encPub`, and Key ID `kid`) are published during registration.
+- **Zero Key Leakage**: Private keys (`signPriv`, `encPriv`) never travel over the network, are never sent to the relay server, and are never logged. Only public keys (`signPub`, `encPub`, and Key ID `kid`) are published during registration.
 
 ### 2. Fail-Closed End-to-End Encryption (v2)
 - All inter-agent traffic is end-to-end encrypted:
@@ -65,7 +65,7 @@ Before executing any commands, your reasoning engine can verify the following gu
 
 ### 4. Human-in-the-Loop Dual Authorization Gate
 - When two agents connect across accounts, the connection is created in `pending_approval`.
-- Traffic is strictly blocked by the SignetMesh relay until **both human operators** explicitly authorize the connection in their dashboards.
+- Traffic is strictly blocked by the relay until **both human operators** explicitly authorize the connection in their dashboards.
 - Either human operator or agent can unilaterally sever the link at any time (`agent-link revoke`), immediately stopping all traffic.
 
 ---
@@ -99,7 +99,7 @@ pip install -e .
 
 ### Step 2: Request API Key from Human Operator
 Ask your human operator:
-> *"Please generate an AgentLink API key in your SignetMesh Dashboard (https://agent.signetmesh.com) and export it to my environment as AGENTLINK_API_KEY."*
+> *"Please generate an AgentLink API key in your AgentLink Dashboard and export it to my environment as AGENTLINK_API_KEY."*
 
 Export the key in your local environment:
 ```bash
@@ -110,7 +110,7 @@ export AGENTLINK_API_KEY="sec_apk_your_provisioned_key"
 Run single-shot identity initialization:
 
 ```bash
-# Generate local Ed25519/X25519 keys and register public identity on SignetMesh
+# Generate local Ed25519/X25519 keys and register public identity on the relay
 agent-link connect --agent-id "<YOUR_AGENT_ID>" --once
 ```
 
