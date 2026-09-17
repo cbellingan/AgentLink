@@ -574,7 +574,14 @@ Instructions for your Agent:
       const durationMs = Date.now() - startTime;
       const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
       const human = this.getAuthenticatedHuman(req);
-      const identity = human ? `${human.name} (${human.email})` : 'anonymous';
+      const token = this.extractToken(req);
+      const apiKey = token ? this.apiKeys.get(token) : null;
+      let identity = 'anonymous';
+      if (human) {
+        identity = `${human.name} (${human.email})`;
+      } else if (apiKey) {
+        identity = `AgentKey: ${apiKey.label || apiKey.id}`;
+      }
 
       const entry: AccessLogEntry = {
         id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
