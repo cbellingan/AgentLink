@@ -275,4 +275,101 @@ describe('AgentLink Server Test Suite', () => {
     expect(filterData.agents.length).toBe(1);
     expect(filterData.agents[0].id).toBe('ted-agent');
   });
+
+  it('10. Telemetry & Metrics: Accurate tracking of message counts, payload sizes, reliability, and dedicated metrics endpoint', async () => {
+    const agentAId = 'metrics-agent-a';
+    const agentBId = 'metrics-agent-b';
+
+    await fetch(`${baseUrl}/api/agents/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ id: agentAId, signPub: 'signA==', encPub: 'encA==', kid: 'kid-metrics-a' }),
+    });
+    await fetch(`${baseUrl}/api/agents/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ id: agentBId, signPub: 'signB==', encPub: 'encB==', kid: 'kid-metrics-b' }),
+    });
+
+    // 1. Establish and approve a fresh link between metrics-agent-a and metrics-agent-b
+    const linkRes = await fetch(`${baseUrl}/api/links/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ agentAId, agentBId }),
+    }).then(r => r.json());
+    const linkId = linkRes.linkId;
+
+    await fetch(`${baseUrl}/api/links/${linkId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({}),
+    });
+
+    // 2. Transmit frame from agentA -> agentB
+    const payloadA = { v: 2, seq: 101, data: 'ciphertext_payload_abcdef123456', sig: 'valid_sig_xyz' };
+    const sendResA = await fetch(`${baseUrl}/api/links/${linkId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ senderId: agentAId, payload: payloadA }),
+    }).then(r => r.json());
+    expect(sendResA.status).toBe('ok');
+
+    // 3. Inspect metrics before polling (1 message in flight/pending)
+    const metricsBeforeRes = await fetch(`${baseUrl}/api/links/${linkId}/metrics`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    expect(metricsBeforeRes.status).toBe(200);
+    const { metrics: mBefore } = await metricsBeforeRes.json();
+    expect(mBefore.totalMessages).toBe(1);
+    expect(mBefore.messagesAtoB).toBe(1);
+    expect(mBefore.messagesBtoA).toBe(0);
+    expect(mBefore.pendingMessages).toBe(1);
+    expect(mBefore.totalBytes).toBeGreaterThan(0);
+    expect(mBefore.bytesAtoB).toBe(mBefore.totalBytes);
+    expect(mBefore.lastSequenceA).toBe(101);
+
+    // 4. Recipient agent polls and receives the frame
+    const pollRes = await fetch(`${baseUrl}/api/agents/${agentBId}/poll?timeout=1000`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    expect(pollRes.status).toBe(200);
+    const pollData = await pollRes.json();
+    expect(pollData.messages.length).toBe(1);
+
+    // 5. Inspect metrics after delivery (0 pending, 1 delivered, 100% reliability)
+    const metricsAfterRes = await fetch(`${baseUrl}/api/links/${linkId}/metrics`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const { metrics: mAfter } = await metricsAfterRes.json();
+    expect(mAfter.pendingMessages).toBe(0);
+    expect(mAfter.deliveredMessages).toBe(1);
+    expect(mAfter.reliabilityPercent).toBe(100);
+    expect(mAfter.status).toBe('optimal');
+    expect(mAfter.lastDeliveredAt).toBeTruthy();
+
+    // 6. Transmit return frame from agentB -> agentA
+    const payloadB = { v: 2, seq: 42, data: 'reply_payload_987654321', sig: 'sig_b' };
+    await fetch(`${baseUrl}/api/links/${linkId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ senderId: agentBId, payload: payloadB }),
+    });
+
+    // 7. Verify full link representation includes metrics
+    const fullLinkRes = await fetch(`${baseUrl}/api/links/${linkId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const fullLinkData = await fullLinkRes.json();
+    const finalMetrics = fullLinkData.link.metrics;
+    expect(finalMetrics.totalMessages).toBe(2);
+    expect(finalMetrics.messagesAtoB).toBe(1);
+    expect(finalMetrics.messagesBtoA).toBe(1);
+    expect(finalMetrics.bytesAtoB).toBeGreaterThan(0);
+    expect(finalMetrics.bytesBtoA).toBeGreaterThan(0);
+    expect(finalMetrics.totalBytes).toBe(finalMetrics.bytesAtoB + finalMetrics.bytesBtoA);
+    expect(finalMetrics.avgPayloadBytes).toBe(Math.round(finalMetrics.totalBytes / 2));
+    expect(finalMetrics.maxPayloadBytes).toBe(Math.max(finalMetrics.bytesAtoB, finalMetrics.bytesBtoA));
+    expect(finalMetrics.lastSequenceB).toBe(42);
+  });
 });
+

@@ -46,6 +46,26 @@ export interface LinkApprovalDetail {
   confirmedSafetyNumber?: string;
 }
 
+export interface LinkMetrics {
+  totalMessages: number;
+  messagesAtoB: number;
+  messagesBtoA: number;
+  deliveredMessages: number;
+  pendingMessages: number;
+  failedMessages: number;
+  totalBytes: number;
+  bytesAtoB: number;
+  bytesBtoA: number;
+  avgPayloadBytes: number;
+  maxPayloadBytes: number;
+  reliabilityPercent: number;
+  status: 'optimal' | 'pending' | 'degraded' | 'idle';
+  lastActivityAt?: string;
+  lastDeliveredAt?: string;
+  lastSequenceA?: number;
+  lastSequenceB?: number;
+}
+
 export interface LinkRecord {
   id: string;
   agentAId: string;
@@ -62,7 +82,18 @@ export interface LinkRecord {
   agentPrompt?: string;
   bytesAtoB?: number;
   bytesBtoA?: number;
+  totalBytes?: number;
+  maxPayloadBytes?: number;
   framesCount?: number;
+  framesAtoB?: number;
+  framesBtoA?: number;
+  framesDelivered?: number;
+  framesFailed?: number;
+  lastActivityAt?: string;
+  lastDeliveredAt?: string;
+  lastSequenceA?: number;
+  lastSequenceB?: number;
+  metrics?: LinkMetrics;
   recentMessages?: Array<LinkMessageEntry>;
   note?: string;
 }

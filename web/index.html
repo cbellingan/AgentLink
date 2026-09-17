@@ -343,11 +343,11 @@
 
     <!-- Link Conversation & Flow Viewer Modal -->
     <div id="linkConversationModal" class="modal-overlay hidden" data-testid="link-conversation-modal">
-      <div class="modal-content" style="max-width: 680px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+      <div class="modal-content" style="max-width: 740px; width: 95%; max-height: 92vh; display: flex; flex-direction: column;">
         <div class="modal-header" style="border-bottom: 1px solid var(--border); padding-bottom: 12px;">
           <div>
             <div style="display: flex; align-items: center; gap: 8px;">
-              <h3 style="font-size: 16px; margin: 0;">🔗 Conversation Flow:</h3>
+              <h3 style="font-size: 16px; margin: 0;">🔗 Link Telemetry & Conversation Flow:</h3>
               <span id="convoAgentA" style="color: var(--accent); font-family: var(--font-mono); font-weight: 700;"></span>
               <span style="color: var(--text-secondary);">⟷</span>
               <span id="convoAgentB" style="color: #38bdf8; font-family: var(--font-mono); font-weight: 700;"></span>
@@ -360,6 +360,57 @@
             </div>
           </div>
           <button type="button" id="btnCloseConversationModal" class="modal-close-btn" data-testid="btn-close-conversation-modal">&times;</button>
+        </div>
+
+        <!-- Link Metrics & Telemetry Grid -->
+        <div id="linkMetricsGrid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0;" data-testid="link-metrics-grid">
+          <!-- Card 1: Message Count -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column;">
+            <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;">
+              <span>💬 Messages</span>
+              <span id="metricQueueBadge" class="badge" style="font-size: 9px; padding: 1px 5px; background: rgba(59, 130, 246, 0.15); color: #60a5fa;">0 queued</span>
+            </div>
+            <div style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 4px 0;" id="metricTotalMessages">0</div>
+            <div style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono);" id="metricMessageFlow">
+              A➔B: 0 &bull; B➔A: 0
+            </div>
+          </div>
+
+          <!-- Card 2: Payload Size & Bandwidth -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column;">
+            <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;">
+              <span>📦 Payload Size</span>
+              <span id="metricAvgPayload" style="font-size: 10px; color: var(--accent); font-family: var(--font-mono);">0 B avg</span>
+            </div>
+            <div style="font-size: 18px; font-weight: 700; color: #38bdf8; margin: 4px 0;" id="metricTotalBytes">0 B</div>
+            <div style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono);" id="metricBytesFlow">
+              A➔B: 0 B &bull; B➔A: 0 B
+            </div>
+          </div>
+
+          <!-- Card 3: Reliability & Delivery -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column;">
+            <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;">
+              <span>🛡️ Reliability</span>
+              <span id="metricReliabilityBadge" class="badge badge-success" style="font-size: 9px; padding: 1px 5px;">100%</span>
+            </div>
+            <div style="font-size: 18px; font-weight: 700; color: #10b981; margin: 4px 0;" id="metricReliabilityRate">100%</div>
+            <div style="font-size: 10px; color: var(--text-secondary);" id="metricDeliveryStatus">
+              0 delivered &bull; 0 dropped
+            </div>
+          </div>
+
+          <!-- Card 4: Last Activity & Telemetry -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column;">
+            <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;">
+              <span>⏱️ Last Active</span>
+              <button type="button" id="btnRefreshLinkMetrics" style="background: none; border: none; cursor: pointer; color: var(--text-secondary); font-size: 11px; padding: 0;" title="Refresh metrics">🔄</button>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 6px 0 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" id="metricLastActive">Never</div>
+            <div style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono);" id="metricSequenceTrack">
+              Seq: None
+            </div>
+          </div>
         </div>
 
         <!-- Relay Architecture Flow Visualizer -->

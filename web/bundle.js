@@ -2662,12 +2662,112 @@ var conversationStream = document.getElementById("conversationStream");
 var formConvoSend = document.getElementById("formConvoSend");
 var convoSenderSelect = document.getElementById("convoSenderSelect");
 var convoMsgInput = document.getElementById("convoMsgInput");
+var metricTotalMessages = document.getElementById("metricTotalMessages");
+var metricQueueBadge = document.getElementById("metricQueueBadge");
+var metricMessageFlow = document.getElementById("metricMessageFlow");
+var metricAvgPayload = document.getElementById("metricAvgPayload");
+var metricTotalBytes = document.getElementById("metricTotalBytes");
+var metricBytesFlow = document.getElementById("metricBytesFlow");
+var metricReliabilityBadge = document.getElementById("metricReliabilityBadge");
+var metricReliabilityRate = document.getElementById("metricReliabilityRate");
+var metricDeliveryStatus = document.getElementById("metricDeliveryStatus");
+var metricLastActive = document.getElementById("metricLastActive");
+var metricSequenceTrack = document.getElementById("metricSequenceTrack");
+var btnRefreshLinkMetrics = document.getElementById("btnRefreshLinkMetrics");
 var currentConvoLinkId = null;
 var convoPollTimer = null;
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+function formatBytes(bytes = 0) {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+  const val = bytes / Math.pow(k, i);
+  return `${val.toFixed(val >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
+}
+function timeAgo(isoDate) {
+  if (!isoDate) return "Never";
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  if (isNaN(diffMs) || diffMs < 0) return "Just now";
+  const sec = Math.floor(diffMs / 1e3);
+  if (sec < 30) return "Just now";
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ago`;
+}
+function renderLinkMetrics(link) {
+  const metrics = link.metrics || {
+    totalMessages: link.framesCount || 0,
+    messagesAtoB: link.framesAtoB || 0,
+    messagesBtoA: link.framesBtoA || 0,
+    deliveredMessages: link.framesDelivered || 0,
+    pendingMessages: 0,
+    failedMessages: link.framesFailed || 0,
+    totalBytes: link.totalBytes || 0,
+    bytesAtoB: link.bytesAtoB || 0,
+    bytesBtoA: link.bytesBtoA || 0,
+    avgPayloadBytes: 0,
+    maxPayloadBytes: link.maxPayloadBytes || 0,
+    reliabilityPercent: 100,
+    status: "optimal",
+    lastActivityAt: link.lastActivityAt,
+    lastDeliveredAt: link.lastDeliveredAt,
+    lastSequenceA: link.lastSequenceA,
+    lastSequenceB: link.lastSequenceB
+  };
+  if (metricTotalMessages) metricTotalMessages.textContent = String(metrics.totalMessages);
+  if (metricQueueBadge) {
+    if (metrics.pendingMessages > 0) {
+      metricQueueBadge.textContent = `${metrics.pendingMessages} queued`;
+      metricQueueBadge.style.background = "rgba(245, 158, 11, 0.2)";
+      metricQueueBadge.style.color = "#fbbf24";
+    } else {
+      metricQueueBadge.textContent = "0 queued";
+      metricQueueBadge.style.background = "rgba(59, 130, 246, 0.15)";
+      metricQueueBadge.style.color = "#60a5fa";
+    }
+  }
+  if (metricMessageFlow) {
+    metricMessageFlow.textContent = `${escapeHtml(link.agentAId || "A")}\u2794: ${metrics.messagesAtoB} \u2022 \u2794${escapeHtml(link.agentBId || "B")}: ${metrics.messagesBtoA}`;
+  }
+  if (metricAvgPayload) {
+    metricAvgPayload.textContent = `${formatBytes(metrics.avgPayloadBytes)} avg`;
+  }
+  if (metricTotalBytes) {
+    metricTotalBytes.textContent = formatBytes(metrics.totalBytes);
+  }
+  if (metricBytesFlow) {
+    metricBytesFlow.textContent = `A\u2794B: ${formatBytes(metrics.bytesAtoB)} \u2022 B\u2794A: ${formatBytes(metrics.bytesBtoA)}`;
+  }
+  if (metricReliabilityRate) {
+    metricReliabilityRate.textContent = `${metrics.reliabilityPercent}%`;
+    metricReliabilityRate.style.color = metrics.reliabilityPercent >= 95 ? "#10b981" : metrics.reliabilityPercent >= 80 ? "#f59e0b" : "#ef4444";
+  }
+  if (metricReliabilityBadge) {
+    metricReliabilityBadge.textContent = (metrics.status || "optimal").toUpperCase();
+    metricReliabilityBadge.className = `badge ${metrics.status === "optimal" || metrics.status === "idle" ? "badge-success" : metrics.status === "pending" ? "badge-warning" : "badge-danger"}`;
+  }
+  if (metricDeliveryStatus) {
+    metricDeliveryStatus.textContent = `${metrics.deliveredMessages} delivered \u2022 ${metrics.failedMessages} dropped`;
+  }
+  if (metricLastActive) {
+    const timeStr = metrics.lastActivityAt ? timeAgo(metrics.lastActivityAt) : "Never";
+    metricLastActive.textContent = timeStr;
+    metricLastActive.title = metrics.lastActivityAt ? new Date(metrics.lastActivityAt).toLocaleString() : "No activity";
+  }
+  if (metricSequenceTrack) {
+    const seqA = metrics.lastSequenceA !== void 0 ? `#${metrics.lastSequenceA}` : "\u2013";
+    const seqB = metrics.lastSequenceB !== void 0 ? `#${metrics.lastSequenceB}` : "\u2013";
+    metricSequenceTrack.textContent = `Seq A: ${seqA} | B: ${seqB}`;
+  }
 }
 var activeLinks = /* @__PURE__ */ new Map();
 async function refreshPeerLinks() {
@@ -2691,6 +2791,16 @@ async function refreshPeerLinks() {
           approvals[currentUser.id] || currentUser.id === "human_admin" && (approvals["human_admin"] || approvals["human_carl"]) || currentUser.role === "admin" && (approvals["human_admin"] || approvals[l.initiatorHumanId])
         ) : false;
         const peerEmail = l.responderHumanEmail || (l.initiatorHumanId !== currentUser?.id ? l.initiatorHumanEmail : null);
+        const m = l.metrics || {
+          totalMessages: l.framesCount || 0,
+          messagesAtoB: l.framesAtoB || 0,
+          messagesBtoA: l.framesBtoA || 0,
+          deliveredMessages: l.framesDelivered || 0,
+          pendingMessages: 0,
+          totalBytes: l.totalBytes || (l.bytesAtoB || 0) + (l.bytesBtoA || 0),
+          reliabilityPercent: 100,
+          lastActivityAt: l.lastActivityAt
+        };
         return `
           <div class="link-item" style="cursor: pointer; background: var(--bg-secondary); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);" onclick="window.openLinkConversationModal('${l.id}')">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
@@ -2705,48 +2815,51 @@ async function refreshPeerLinks() {
                   ${l.safetyNumber ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); font-family: var(--font-mono); font-size: 11px;">\u{1F6E1}\uFE0F Safety: ${escapeHtml(l.safetyNumber)}</span>` : ""}
                   ${peerEmail ? `<span style="font-size: 11px; background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono);">\u{1F464} ${escapeHtml(peerEmail)}</span>` : ""}
                 </div>
-                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">
-                  ID: <span style="font-family: var(--font-mono);">${escapeHtml(l.id)}</span>
-                  &bull; Frames: <strong style="color: var(--text-primary);">${l.framesCount || 0}</strong>
-                  &bull; Created: ${new Date(l.createdAt).toLocaleTimeString()}
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                  <span>ID: <span style="font-family: var(--font-mono);">${escapeHtml(l.id)}</span></span>
+                  &bull; <span>\u{1F4AC} <strong>${m.totalMessages}</strong> msgs (${m.messagesAtoB}\u2794 / \u2B9C${m.messagesBtoA})</span>
+                  &bull; <span>\u{1F4E6} <strong style="color: #38bdf8;">${formatBytes(m.totalBytes)}</strong></span>
+                  &bull; <span>\u{1F6E1}\uFE0F <strong style="color: ${m.reliabilityPercent >= 95 ? "#10b981" : "#f59e0b"};">${m.reliabilityPercent}%</strong> reliability</span>
+                  &bull; <span>\u23F1\uFE0F ${m.lastActivityAt ? timeAgo(m.lastActivityAt) : "Idle"}</span>
+                  ${m.pendingMessages > 0 ? `<span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; font-size: 9px; padding: 1px 4px;">${m.pendingMessages} in queue</span>` : ""}
                 </div>
               </div>
               <div style="display: flex; gap: 6px; flex-shrink: 0;" onclick="event.stopPropagation()">
-                ${!isActive && (!isCurrentApproved || currentUser?.role === "admin") ? `
-                  <button type="button" class="btn btn-sm" style="background: #059669;" onclick="window.approveLink('${l.id}')">
-                    \u2713 Approve Link
+                  ${!isActive && (!isCurrentApproved || currentUser?.role === "admin") ? `
+                    <button type="button" class="btn btn-sm" style="background: #059669;" onclick="window.approveLink('${l.id}')">
+                      \u2713 Approve Link
+                    </button>
+                  ` : !isActive && isCurrentApproved ? `
+                    <span style="font-size: 11px; color: #34d399; font-weight: 500; align-self: center;">\u2713 You Approved (Waiting for Peer)</span>
+                  ` : ""}
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="window.showAgentPromptForLink('${l.id}')" title="Copy human-to-agent prompt instructions">
+                    \u{1F4CB} Agent Prompt
                   </button>
-                ` : !isActive && isCurrentApproved ? `
-                  <span style="font-size: 11px; color: #34d399; font-weight: 500; align-self: center;">\u2713 You Approved (Waiting for Peer)</span>
-                ` : ""}
-                <button type="button" class="btn btn-secondary btn-sm" onclick="window.showAgentPromptForLink('${l.id}')" title="Copy human-to-agent prompt instructions">
-                  \u{1F4CB} Agent Prompt
-                </button>
-                <button type="button" class="btn btn-sm" style="background: #2563eb;" onclick="window.openLinkConversationModal('${l.id}')" title="View conversation flow & frames">
-                  \u{1F441}\uFE0F Conversation
-                </button>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="window.openSendMsgModal('${l.id}')" title="Send a message to an agent">
-                  \u{1F4AC} Send to Agent
-                </button>
-                <button type="button" class="btn btn-danger btn-sm" onclick="window.severLink('${l.id}')">
-                  Sever
-                </button>
-              </div>
-            </div>
-            ${l.recentMessages && l.recentMessages.length > 0 ? `
-              <div style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; color: #a1a1aa; border-left: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center;">
-                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">
-                  Recent Frame: <strong style="color: #38bdf8;">${escapeHtml(l.recentMessages[l.recentMessages.length - 1].senderId)}</strong>: <span style="color: #e4e4e7;">${escapeHtml(l.recentMessages[l.recentMessages.length - 1].text)}</span>
+                  <button type="button" class="btn btn-sm" style="background: #2563eb;" onclick="window.openLinkConversationModal('${l.id}')" title="Inspect link telemetry, payload sizes, reliability, and conversation flow">
+                    \u{1F4CA} Metrics & Flow
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="window.openSendMsgModal('${l.id}')" title="Send a message to an agent">
+                    \u{1F4AC} Send to Agent
+                  </button>
+                  <button type="button" class="btn btn-danger btn-sm" onclick="window.severLink('${l.id}')">
+                    Sever
+                  </button>
                 </div>
-                <span style="font-size: 10px; color: var(--accent); white-space: nowrap;">View full flow \u2192</span>
               </div>
-            ` : `
-              <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); opacity: 0.8;">
-                Click to open live conversation flow & message stream \u2192
-              </div>
-            `}
-          </div>
-        `;
+              ${l.recentMessages && l.recentMessages.length > 0 ? `
+                <div style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; color: #a1a1aa; border-left: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center;">
+                  <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80%;">
+                    Recent Frame: <strong style="color: #38bdf8;">${escapeHtml(l.recentMessages[l.recentMessages.length - 1].senderId)}</strong>: <span style="color: #e4e4e7;">${escapeHtml(l.recentMessages[l.recentMessages.length - 1].text)}</span>
+                  </div>
+                  <span style="font-size: 10px; color: var(--accent); white-space: nowrap;">Inspect metrics & flow \u2192</span>
+                </div>
+              ` : `
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-secondary); opacity: 0.8;">
+                  Click anywhere on link to inspect metrics, payload sizes, and conversation flow \u2192
+                </div>
+              `}
+            </div>
+          `;
       }).join("");
     }
   } catch (err) {
@@ -2934,6 +3047,7 @@ window.openLinkConversationModal = async (linkId) => {
     };
   }
   renderConversationModalHeader(link);
+  renderLinkMetrics(link);
   linkConversationModal.classList.remove("hidden");
   await refreshConversationFlow(linkId, true);
   if (convoPollTimer) clearInterval(convoPollTimer);
@@ -2976,6 +3090,7 @@ async function refreshConversationFlow(linkId, autoScroll = true) {
     if (!link) return;
     activeLinks.set(link.id, link);
     renderConversationModalHeader(link);
+    renderLinkMetrics(link);
     if (convoFramesCount) convoFramesCount.textContent = String(link.framesCount || 0);
     const msgs = link.recentMessages || [];
     if (msgs.length === 0) {
@@ -2996,6 +3111,9 @@ async function refreshConversationFlow(linkId, autoScroll = true) {
       const borderCol = isFromA ? "rgba(168, 85, 247, 0.35)" : "rgba(56, 189, 248, 0.35)";
       const accentCol = isFromA ? "var(--accent)" : "#38bdf8";
       const targetAgent = isFromA ? link.agentBId : link.agentAId;
+      const payloadStr = m.payload ? typeof m.payload === "string" ? m.payload : JSON.stringify(m.payload) : m.text || "";
+      const payloadBytes = new TextEncoder().encode(payloadStr).length;
+      const payloadSizeFormatted = formatBytes(payloadBytes);
       return `
         <div style="display: flex; flex-direction: column; max-width: 85%; ${isFromA ? "align-self: flex-start;" : "align-self: flex-end;"} background: ${bubbleBg}; border: 1px solid ${borderCol}; border-radius: 8px; padding: 10px 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.25);">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px;">
@@ -3003,15 +3121,19 @@ async function refreshConversationFlow(linkId, autoScroll = true) {
               <strong style="color: ${accentCol}; font-family: var(--font-mono); font-size: 12px;">${escapeHtml(m.senderId)}</strong>
               <span style="color: var(--text-secondary); font-size: 10px;">\u2794</span>
               <span style="color: var(--text-secondary); font-size: 11px; font-family: var(--font-mono);">${escapeHtml(targetAgent)}</span>
+              ${m.seq !== void 0 ? `<span style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono);">#${m.seq}</span>` : ""}
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="badge" style="background: rgba(255,255,255,0.06); color: var(--text-secondary); font-size: 9px; padding: 1px 5px; font-family: var(--font-mono);">
+                \u{1F4E6} ${payloadSizeFormatted}
+              </span>
               ${m.isEncrypted ? `
                 <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 9px; padding: 1px 5px; font-weight: 600;">
                   \u{1F512} ${m.isSigned ? "E2EE Signed (v2)" : "E2EE Frame"}
                 </span>
               ` : `
                 <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; font-size: 9px; padding: 1px 5px; font-weight: 600;">
-                  \u26A0\uFE0F Plaintext (Insecure)
+                  \u26A0\uFE0F Plaintext
                 </span>
               `}
               <span style="font-size: 10px; color: var(--text-secondary);">${new Date(m.timestamp).toLocaleTimeString()}</span>
@@ -3063,6 +3185,12 @@ btnCloseConversationModal?.addEventListener("click", () => {
     convoPollTimer = null;
   }
   currentConvoLinkId = null;
+});
+btnRefreshLinkMetrics?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (currentConvoLinkId) {
+    refreshConversationFlow(currentConvoLinkId, false);
+  }
 });
 window.deregisterAgent = async (agentId) => {
   if (!confirm(`De-register agent "${agentId}"?`)) return;

@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
-import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
+import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, LinkMetrics, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -198,6 +198,63 @@ export class AgentLinkServer {
     const hash = crypto.createHash('sha256').update([keyA, keyB].sort().join('::')).digest();
     const num = (hash.readUInt32BE(0) % 900000) + 100000;
     return `${String(num).slice(0, 3)}-${String(num).slice(3, 6)}`;
+  }
+
+  public computeLinkMetrics(link: LinkRecord): LinkMetrics {
+    const total = link.framesCount || 0;
+    const atoB = link.framesAtoB ?? (link.recentMessages ? link.recentMessages.filter(m => m.senderId === link.agentAId).length : 0);
+    const btoA = link.framesBtoA ?? (link.recentMessages ? link.recentMessages.filter(m => m.senderId === link.agentBId).length : 0);
+    const bA = link.bytesAtoB || 0;
+    const bB = link.bytesBtoA || 0;
+    const totalB = link.totalBytes || (bA + bB);
+    const avg = total > 0 ? Math.round(totalB / total) : 0;
+
+    const queueA = (this.messageQueues.get(link.agentAId) || []).filter(m => m.linkId === link.id).length;
+    const queueB = (this.messageQueues.get(link.agentBId) || []).filter(m => m.linkId === link.id).length;
+    const pending = queueA + queueB;
+
+    const failed = link.framesFailed || 0;
+    const delivered = link.framesDelivered !== undefined 
+      ? link.framesDelivered 
+      : Math.max(0, total - pending - failed);
+
+    let reliabilityPercent = 100;
+    if (delivered + failed > 0) {
+      reliabilityPercent = Math.round((delivered / (delivered + failed)) * 1000) / 10;
+    }
+
+    let status: 'optimal' | 'pending' | 'degraded' | 'idle' = 'idle';
+    if (total === 0) {
+      status = 'idle';
+    } else if (failed > 0 || reliabilityPercent < 95) {
+      status = 'degraded';
+    } else if (pending > 0) {
+      status = 'pending';
+    } else {
+      status = 'optimal';
+    }
+
+    const lastActivity = link.lastActivityAt || (link.recentMessages && link.recentMessages.length > 0 ? link.recentMessages[link.recentMessages.length - 1].timestamp : undefined);
+
+    return {
+      totalMessages: total,
+      messagesAtoB: atoB,
+      messagesBtoA: btoA,
+      deliveredMessages: delivered,
+      pendingMessages: pending,
+      failedMessages: failed,
+      totalBytes: totalB,
+      bytesAtoB: bA,
+      bytesBtoA: bB,
+      avgPayloadBytes: avg,
+      maxPayloadBytes: link.maxPayloadBytes || 0,
+      reliabilityPercent,
+      status,
+      lastActivityAt: lastActivity,
+      lastDeliveredAt: link.lastDeliveredAt,
+      lastSequenceA: link.lastSequenceA,
+      lastSequenceB: link.lastSequenceB,
+    };
   }
 
   public async verifyGoogleIdToken(token: string): Promise<{ email: string; name?: string; email_verified?: boolean } | null> {
@@ -1481,6 +1538,14 @@ Instructions for your Agent:
       if (q.length > 0) {
         const msgs = [...q];
         q.length = 0;
+        for (const msg of msgs) {
+          if (msg.linkId && this.links.has(msg.linkId)) {
+            const l = this.links.get(msg.linkId)!;
+            l.framesDelivered = (l.framesDelivered || 0) + 1;
+            l.lastDeliveredAt = new Date().toISOString();
+          }
+        }
+        this.saveState();
         this.sendJson(res, 200, { messages: msgs });
         return;
       }
@@ -1499,6 +1564,14 @@ Instructions for your Agent:
         clearTimeout(timer);
         const idx = waiters!.indexOf(resolver);
         if (idx !== -1) waiters!.splice(idx, 1);
+        for (const msg of msgs) {
+          if (msg.linkId && this.links.has(msg.linkId)) {
+            const l = this.links.get(msg.linkId)!;
+            l.framesDelivered = (l.framesDelivered || 0) + 1;
+            l.lastDeliveredAt = new Date().toISOString();
+          }
+        }
+        this.saveState();
         this.sendJson(res, 200, { messages: msgs });
         return true;
       };
@@ -1659,10 +1732,12 @@ Instructions for your Agent:
           safetyNumber,
           note: l.note,
         });
+        const metrics = this.computeLinkMetrics(l);
         return {
           ...l,
           safetyNumber,
           agentPrompt,
+          metrics,
           recentMessages: msgs,
         };
       });
@@ -1671,7 +1746,38 @@ Instructions for your Agent:
       return;
     }
 
-    if (req.method === 'GET' && parsedUrl.startsWith('/api/links/') && !parsedUrl.endsWith('/poll') && !parsedUrl.endsWith('/approve') && !parsedUrl.endsWith('/send') && !parsedUrl.endsWith('/message')) {
+    // Dedicated Link Metrics Query Endpoint
+    if (req.method === 'GET' && parsedUrl.startsWith('/api/links/') && parsedUrl.endsWith('/metrics')) {
+      const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+      if (!human && !apiKey) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
+        return;
+      }
+
+      const parts = parsedUrl.split('/');
+      const linkId = parts[3];
+      const link = this.links.get(linkId);
+      if (!link) {
+        this.sendJson(res, 404, { error: 'link_not_found', message: `Link '${linkId}' not found` });
+        return;
+      }
+
+      const isParticipant = link.initiatorHumanId === ownerHumanId ||
+                            link.responderHumanId === ownerHumanId ||
+                            this.isAgentOwnedBy(link.agentAId, ownerHumanId) ||
+                            this.isAgentOwnedBy(link.agentBId, ownerHumanId);
+
+      if (!isAdmin && !isParticipant) {
+        this.sendJson(res, 403, { error: 'forbidden', message: 'Not authorized to view this link' });
+        return;
+      }
+
+      const metrics = this.computeLinkMetrics(link);
+      this.sendJson(res, 200, { status: 'ok', linkId: link.id, metrics });
+      return;
+    }
+
+    if (req.method === 'GET' && parsedUrl.startsWith('/api/links/') && !parsedUrl.endsWith('/poll') && !parsedUrl.endsWith('/approve') && !parsedUrl.endsWith('/send') && !parsedUrl.endsWith('/message') && !parsedUrl.endsWith('/metrics')) {
       const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
       if (!human && !apiKey) {
         this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
@@ -1705,7 +1811,8 @@ Instructions for your Agent:
         safetyNumber,
         note: link.note,
       });
-      this.sendJson(res, 200, { status: 'ok', link: { ...link, safetyNumber, agentPrompt } });
+      const metrics = this.computeLinkMetrics(link);
+      this.sendJson(res, 200, { status: 'ok', link: { ...link, safetyNumber, agentPrompt, metrics } });
       return;
     }
 
@@ -1871,11 +1978,30 @@ Instructions for your Agent:
 
         if (targetId) {
           if (link) {
-            link.framesCount = (link.framesCount || 0) + 1;
-            if (!link.recentMessages) link.recentMessages = [];
             const isEnc = typeof body.payload === 'object' && body.payload !== null && Boolean(body.payload.data);
             const isSigned = isEnc && Boolean(body.payload.sig);
             const seq = isEnc && typeof body.payload.seq === 'number' ? body.payload.seq : undefined;
+
+            const payloadStr = typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload ?? '');
+            const payloadBytes = Buffer.byteLength(payloadStr, 'utf8');
+
+            link.framesCount = (link.framesCount || 0) + 1;
+            if (senderId === link.agentAId) {
+              link.framesAtoB = (link.framesAtoB || 0) + 1;
+              link.bytesAtoB = (link.bytesAtoB || 0) + payloadBytes;
+              if (seq !== undefined) link.lastSequenceA = seq;
+            } else {
+              link.framesBtoA = (link.framesBtoA || 0) + 1;
+              link.bytesBtoA = (link.bytesBtoA || 0) + payloadBytes;
+              if (seq !== undefined) link.lastSequenceB = seq;
+            }
+            link.totalBytes = (link.bytesAtoB || 0) + (link.bytesBtoA || 0);
+            if (!link.maxPayloadBytes || payloadBytes > link.maxPayloadBytes) {
+              link.maxPayloadBytes = payloadBytes;
+            }
+            link.lastActivityAt = new Date().toISOString();
+
+            if (!link.recentMessages) link.recentMessages = [];
             const previewText = typeof body.payload === 'string' 
               ? body.payload 
               : (isEnc ? `[E2EE v${body.payload.v || 1}${seq ? ` #${seq}` : ''} ${body.payload.data.slice(0, 12)}...]` : '[E2EE Encrypted Payload]');
@@ -1915,6 +2041,12 @@ Instructions for your Agent:
             const delivered = resolver(msgs);
             if (!delivered) {
               q.unshift(...msgs);
+            } else {
+              if (link) {
+                link.framesDelivered = (link.framesDelivered || 0) + msgs.filter(m => m.linkId === link.id).length;
+                link.lastDeliveredAt = new Date().toISOString();
+                this.saveState();
+              }
             }
           }
         }
