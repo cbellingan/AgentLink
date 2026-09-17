@@ -117,3 +117,12 @@ Whenever planning or implementing high-risk, breaking, or critical architectural
 1. **Branch First**: Do not work directly on `main`. Create a dedicated feature/security branch (`git checkout -b sec/...` or `feat/...`).
 2. **Develop & Verify in Isolation**: Implement the red-first tests and fixes on the branch, running all unit, integration, and cross-project test suites.
 3. **Merge When Ready**: Merge back into `main` only after full verification passes, preserving an unbroken, deployable `main` branch at all times.
+
+---
+
+## Rule 3: Automatic Remote Synchronization for GitHub-Tracked Repositories
+
+Whenever changes in GitHub-tracked repositories (such as `AgentLink` or `agent-link-cli`) pass pre-commit security audits and automated test verification, commits must be pushed automatically to the remote repository (`git push origin <branch>`). Commits should never remain unpushed locally in tracked repositories.
+
+*Note: Dedicated private deployment repositories (such as `SignetMesh`) remain strictly local with no git remote.*
+

@@ -145,6 +145,7 @@ describe('AgentLink Server Test Suite', () => {
       body: JSON.stringify({ label: 'Ted Key' }),
     }).then(r => r.json());
 
+    expect(keyRes.apiKey.lastUsedAt).toBeFalsy();
     const apiKey = keyRes.apiKey.key;
 
     // 2. Register agent
@@ -174,6 +175,15 @@ describe('AgentLink Server Test Suite', () => {
       headers: { 'Authorization': `Bearer ${adminToken}` },
     }).then(r => r.json());
     expect(agentsRes.agents.some((a: any) => a.id === 'ted-agent')).toBe(true);
+
+    // 4. Confirm lastUsedAt was recorded and returned in /api/keys
+    const keysAfterReg = await fetch(`${baseUrl}/api/keys`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    }).then(r => r.json());
+    const tedKey = keysAfterReg.keys.find((k: any) => k.id === keyRes.apiKey.id);
+    expect(tedKey).toBeDefined();
+    expect(tedKey.lastUsedAt).toBeDefined();
+    expect(new Date(tedKey.lastUsedAt).getTime()).toBeGreaterThan(Date.now() - 5000);
   });
 
   it('6. Creates link, dispatches conversation frames, and returns flow via GET /api/links/:linkId', async () => {

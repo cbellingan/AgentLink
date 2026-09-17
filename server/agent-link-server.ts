@@ -37,6 +37,7 @@ export class AgentLinkServer {
   private bugRateLimits: Map<string, number[]> = new Map(); // key -> timestamps
   private supervisorSockets: Set<WebSocket> = new Set();
   private stateFilePath: string;
+  private lastKeySaveTime: number = 0;
 
   constructor(port: number = 3000, staticPath?: string) {
     this.port = port;
@@ -1015,7 +1016,7 @@ Instructions for your Agent:
       readJson((body) => {
         const token = this.extractToken(req);
         const human = this.getAuthenticatedHuman(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
         if (!human && !apiKeyRecord) {
           this.sendJson(res, 401, {
@@ -1175,7 +1176,7 @@ Instructions for your Agent:
     if (req.method === 'GET' && parsedUrl === '/api/invites') {
       const token = this.extractToken(req);
       const human = this.getAuthenticatedHuman(req);
-      const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+      const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
       if (!human && !apiKeyRecord) {
         this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
@@ -1197,7 +1198,7 @@ Instructions for your Agent:
       const inviteId = parsedUrl.replace('/api/invites/', '').trim();
       const token = this.extractToken(req);
       const human = this.getAuthenticatedHuman(req);
-      const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+      const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
       if (!human && !apiKeyRecord) {
         this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required' });
@@ -1220,7 +1221,7 @@ Instructions for your Agent:
     if (req.method === 'POST' && (parsedUrl === '/api/agents/register' || parsedUrl === '/api/agents')) {
       readJson((body) => {
         const token = this.extractToken(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
         const humanSession = token ? this.humanSessions.get(token) : null;
         const isAdmin = Boolean(humanSession && humanSession.role === 'admin');
 
@@ -1520,7 +1521,7 @@ Instructions for your Agent:
       readJson((body) => {
         const token = this.extractToken(req);
         const human = this.getAuthenticatedHuman(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
         const agentAId = body.agentAId || body.fromAgentId;
         const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
@@ -1990,7 +1991,7 @@ Instructions for your Agent:
 
         const human = this.getAuthenticatedHuman(req);
         const token = this.extractToken(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
         const agentRecord = rawAgentId ? this.agents.get(rawAgentId) : null;
 
         let submitterHumanId: string | undefined = undefined;
@@ -2054,7 +2055,7 @@ Instructions for your Agent:
 
       const human = this.getAuthenticatedHuman(req);
       const token = this.extractToken(req);
-      const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+      const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
       let reports = this.bugReports;
 
@@ -2123,7 +2124,7 @@ Instructions for your Agent:
 
         const human = this.getAuthenticatedHuman(req);
         const token = this.extractToken(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
 
         // Authorization check: only allow resolution if the caller owns the report
         if (human) {
@@ -2287,6 +2288,24 @@ Instructions for your Agent:
     return this.humanSessions.get(token) || null;
   }
 
+  public touchApiKey(apiKey: ApiKeyRecord): void {
+    apiKey.lastUsedAt = new Date().toISOString();
+    const now = Date.now();
+    if (now - this.lastKeySaveTime > 5000) {
+      this.lastKeySaveTime = now;
+      this.saveState();
+    }
+  }
+
+  public resolveApiKey(token: string | null): ApiKeyRecord | null {
+    if (!token) return null;
+    const record = this.apiKeys.get(token) || null;
+    if (record) {
+      this.touchApiKey(record);
+    }
+    return record;
+  }
+
   private getAuthenticatedPrincipal(req: http.IncomingMessage): {
     token: string | null;
     human: HumanUser | null;
@@ -2296,7 +2315,7 @@ Instructions for your Agent:
   } {
     const token = this.extractToken(req);
     const human = this.getAuthenticatedHuman(req);
-    let apiKey = token ? this.apiKeys.get(token) || null : null;
+    let apiKey = token ? this.resolveApiKey(token) : null;
     if (!apiKey && token === 'sec_apk_valid_12345') {
       apiKey = {
         id: 'test_key',

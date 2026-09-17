@@ -38,6 +38,7 @@ var AgentLinkServer = class {
   // key -> timestamps
   supervisorSockets = /* @__PURE__ */ new Set();
   stateFilePath;
+  lastKeySaveTime = 0;
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
     this.staticPath = staticPath2 || path.resolve("web");
@@ -877,7 +878,7 @@ Instructions for your Agent:
         readJson((body) => {
           const token = this.extractToken(req);
           const human = this.getAuthenticatedHuman(req);
-          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           if (!human && !apiKeyRecord) {
             this.sendJson(res, 401, {
               error: "unauthorized",
@@ -1026,7 +1027,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       if (req.method === "GET" && parsedUrl === "/api/invites") {
         const token = this.extractToken(req);
         const human = this.getAuthenticatedHuman(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
         if (!human && !apiKeyRecord) {
           this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
           return;
@@ -1043,7 +1044,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         const inviteId = parsedUrl.replace("/api/invites/", "").trim();
         const token = this.extractToken(req);
         const human = this.getAuthenticatedHuman(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
         if (!human && !apiKeyRecord) {
           this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
           return;
@@ -1062,7 +1063,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       if (req.method === "POST" && (parsedUrl === "/api/agents/register" || parsedUrl === "/api/agents")) {
         readJson((body) => {
           const token = this.extractToken(req);
-          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           const humanSession = token ? this.humanSessions.get(token) : null;
           const isAdmin = Boolean(humanSession && humanSession.role === "admin");
           if (!apiKeyRecord && !isAdmin && token !== "sec_apk_valid_12345") {
@@ -1306,7 +1307,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         readJson((body) => {
           const token = this.extractToken(req);
           const human = this.getAuthenticatedHuman(req);
-          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           const agentAId = body.agentAId || body.fromAgentId;
           const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
           if (!agentAId || !agentBId) {
@@ -1696,7 +1697,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           const severity = validSeverities.includes(body.severity) ? body.severity : "medium";
           const human = this.getAuthenticatedHuman(req);
           const token = this.extractToken(req);
-          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           const agentRecord = rawAgentId ? this.agents.get(rawAgentId) : null;
           let submitterHumanId = void 0;
           let submitterEmail = void 0;
@@ -1750,7 +1751,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         const agentId = urlObj.searchParams.get("agentId");
         const human = this.getAuthenticatedHuman(req);
         const token = this.extractToken(req);
-        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const apiKeyRecord = token ? this.resolveApiKey(token) : null;
         let reports = this.bugReports;
         if (human) {
           reports = reports.filter((r) => {
@@ -1806,7 +1807,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           }
           const human = this.getAuthenticatedHuman(req);
           const token = this.extractToken(req);
-          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           if (human) {
             const isOwner = Boolean(
               bug.submitterHumanId && (bug.submitterHumanId === human.id || human.id === "human_admin" && (bug.submitterHumanId === "human_admin" || bug.submitterHumanId === "human_carl")) || bug.submitterEmail && human.email && bug.submitterEmail.toLowerCase() === human.email.toLowerCase() || bug.agentId && (this.agents.get(bug.agentId)?.ownerHumanId === human.id || human.id === "human_admin" && (this.agents.get(bug.agentId)?.ownerHumanId === "human_admin" || this.agents.get(bug.agentId)?.ownerHumanId === "human_carl"))
@@ -1949,10 +1950,26 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     if (!token) return null;
     return this.humanSessions.get(token) || null;
   }
+  touchApiKey(apiKey) {
+    apiKey.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const now = Date.now();
+    if (now - this.lastKeySaveTime > 5e3) {
+      this.lastKeySaveTime = now;
+      this.saveState();
+    }
+  }
+  resolveApiKey(token) {
+    if (!token) return null;
+    const record = this.apiKeys.get(token) || null;
+    if (record) {
+      this.touchApiKey(record);
+    }
+    return record;
+  }
   getAuthenticatedPrincipal(req) {
     const token = this.extractToken(req);
     const human = this.getAuthenticatedHuman(req);
-    let apiKey = token ? this.apiKeys.get(token) || null : null;
+    let apiKey = token ? this.resolveApiKey(token) : null;
     if (!apiKey && token === "sec_apk_valid_12345") {
       apiKey = {
         id: "test_key",

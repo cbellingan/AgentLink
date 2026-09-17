@@ -471,6 +471,22 @@ btnConfirmRevokeKey?.addEventListener('click', async () => {
   }, 2000);
 };
 
+function formatTimeAgo(isoString?: string | null): string {
+  if (!isoString) return 'Never';
+  const date = new Date(isoString);
+  const now = Date.now();
+  const diffSec = Math.floor((now - date.getTime()) / 1000);
+  if (diffSec < 10) return 'Just now';
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
 async function refreshApiKeys() {
   try {
     const res = await apiRequest('/api/keys');
@@ -480,11 +496,16 @@ async function refreshApiKeys() {
       keysListContainer.innerHTML = `<em>No active API keys yet. Click "➕ Generate Agent API Key" to create one.</em>`;
     } else {
       keysListContainer.innerHTML = keys.map((k) => `
-        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border);">
+        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border);">
           <div>
-            <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 12px;">${k.keyMasked || k.key}</strong>
-            <span style="font-size: 11px; color: var(--text-secondary); margin-left: 8px;">${k.label || 'Agent Key'}</span>
-            <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">Created: ${new Date(k.createdAt).toLocaleDateString()}</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <strong style="color: var(--accent); font-family: var(--font-mono); font-size: 13px;">${k.keyMasked || k.key}</strong>
+              <span style="font-size: 11px; color: var(--text-secondary); background: var(--bg-primary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);">${k.label || 'Agent Key'}</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-secondary); margin-top: 4px; display: flex; gap: 14px; align-items: center;">
+              <span>📅 Created: ${new Date(k.createdAt).toLocaleDateString()}</span>
+              <span>🕒 Last Used: ${k.lastUsedAt ? `<span style="color: #38bdf8; font-weight: 600;" title="${new Date(k.lastUsedAt).toLocaleString()}">${formatTimeAgo(k.lastUsedAt)}</span> <span style="opacity: 0.6; font-size: 9px;">(${new Date(k.lastUsedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})</span>` : '<em style="opacity: 0.6;">Never</em>'}</span>
+            </div>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
             <button type="button" class="btn btn-secondary btn-sm" onclick="window.copyApiKey('${k.key}', this)">📋 Copy</button>
