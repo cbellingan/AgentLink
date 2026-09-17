@@ -407,7 +407,11 @@ formCredentialLogin?.addEventListener('submit', async (e) => {
 
 btnGoogleSignIn?.addEventListener('click', () => {
   clientLog('info', 'auth_ui', 'Clicked "Sign in with Google" button on landing gate');
-  handleGoogleLogin();
+  if (googleClientId && (window as any).google?.accounts?.id) {
+    (window as any).google.accounts.id.prompt();
+  } else {
+    document.getElementById('googleConfigNotice')?.classList.remove('hidden');
+  }
 });
 
 btnSignOut?.addEventListener('click', async () => {
