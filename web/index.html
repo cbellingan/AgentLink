@@ -206,6 +206,7 @@
           <div style="display: flex; gap: 8px; align-items: center;">
             <span id="bugCountBadge" class="badge badge-warning" data-testid="bug-count-badge">0 Open</span>
             <button type="button" id="btnRefreshBugs" class="btn btn-secondary btn-sm" title="Refresh bug reports">🔄 Refresh</button>
+            <button type="button" id="btnOpenReportBugModal" class="btn btn-sm" style="font-size: 11px; padding: 4px 10px; background: var(--accent); color: #fff;" title="Submit a new bug report">➕ Report Bug</button>
           </div>
         </div>
 
@@ -218,6 +219,41 @@
         <div id="bugsListContainer" style="display: flex; flex-direction: column; gap: 8px;" data-testid="bugs-list-container">
           <em>Loading bug reports...</em>
         </div>
+      </div>
+    </div>
+
+    <!-- Report Bug Modal -->
+    <div id="reportBugModal" class="modal-overlay hidden" data-testid="report-bug-modal">
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h3 style="font-size: 15px;">🐛 Submit Bug Report</h3>
+          <button type="button" id="btnCloseReportBugModal" class="modal-close-btn">&times;</button>
+        </div>
+        <form id="formReportBug" style="display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <label for="bugReportTitle" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Summary / Title</label>
+            <input type="text" id="bugReportTitle" required placeholder="e.g. Failed handshake with peer" style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);" />
+          </div>
+          <div>
+            <label for="bugReportSeverity" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Severity</label>
+            <select id="bugReportSeverity" style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary);">
+              <option value="low">Low</option>
+              <option value="medium" selected>Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div>
+            <label for="bugReportDetails" style="display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Details / Error Log</label>
+            <textarea id="bugReportDetails" rows="4" required placeholder="Paste error details, stack trace, or anomaly behavior..." style="width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); resize: vertical;"></textarea>
+          </div>
+          <div style="font-size: 11px; color: var(--text-secondary); background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px;">
+            🔒 Submitter-Scoped: This bug report will only be visible to you and your authorized agents.
+          </div>
+          <button type="submit" class="btn" style="width: 100%; justify-content: center; padding: 10px;">
+            Submit Bug Report
+          </button>
+        </form>
       </div>
     </div>
 

@@ -153,4 +153,165 @@ describe('Autonomous Bug Reporting System', () => {
     const updatedBug = listJson2.bugs.find((b: any) => b.id === firstBug.id);
     expect(updatedBug.resolved).toBe(true);
   });
+
+  it('5. Enforces strict submitter privacy: Operator A cannot see Operator B bug reports and vice-versa', async () => {
+    // Create Operator A session (Carl / Admin)
+    const tokenA = server.createSession({
+      id: 'human_admin',
+      email: 'carl@test.local',
+      name: 'Carl',
+      role: 'admin',
+    });
+
+    // Create Operator B session (Vijaya / Collaborator)
+    const tokenB = server.createSession({
+      id: 'human_vijaya_12345',
+      email: 'vijaya@test.local',
+      name: 'Vijaya',
+      role: 'collaborator',
+    });
+
+    // Operator A submits a bug report
+    const resA = await fetch(`${baseUrl}/api/bugs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({
+        title: 'Operator A Private Bug: Database Lock Contention',
+        details: 'High concurrency issue during ledger sync',
+        severity: 'high',
+      }),
+    });
+    expect(resA.status).toBe(201);
+    const jsonA = await resA.json();
+    const bugIdA = jsonA.bugId;
+    expect(jsonA.report.submitterHumanId).toBe('human_admin');
+    expect(jsonA.report.submitterEmail).toBe('carl@test.local');
+
+    // Operator B submits a bug report
+    const resB = await fetch(`${baseUrl}/api/bugs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenB}`,
+      },
+      body: JSON.stringify({
+        title: 'Operator B Private Bug: WebAuthn Prompt Timeout',
+        details: 'Key generation timeout on Safari mobile',
+        severity: 'medium',
+      }),
+    });
+    expect(resB.status).toBe(201);
+    const jsonB = await resB.json();
+    const bugIdB = jsonB.bugId;
+    expect(jsonB.report.submitterHumanId).toBe('human_vijaya_12345');
+    expect(jsonB.report.submitterEmail).toBe('vijaya@test.local');
+
+    // Query bugs as Operator A
+    const listA = await fetch(`${baseUrl}/api/bugs`, {
+      headers: { 'Authorization': `Bearer ${tokenA}` },
+    });
+    expect(listA.status).toBe(200);
+    const listAJson = await listA.json();
+    const bugsA = listAJson.bugs;
+    // Operator A must see bug A
+    expect(bugsA.some((b: any) => b.id === bugIdA)).toBe(true);
+    // Operator A must NOT see bug B!
+    expect(bugsA.some((b: any) => b.id === bugIdB)).toBe(false);
+
+    // Query bugs as Operator B
+    const listB = await fetch(`${baseUrl}/api/bugs`, {
+      headers: { 'Authorization': `Bearer ${tokenB}` },
+    });
+    expect(listB.status).toBe(200);
+    const listBJson = await listB.json();
+    const bugsB = listBJson.bugs;
+    // Operator B must see bug B
+    expect(bugsB.some((b: any) => b.id === bugIdB)).toBe(true);
+    // Operator B must NOT see bug A!
+    expect(bugsB.some((b: any) => b.id === bugIdA)).toBe(false);
+  });
+
+  it('6. Blocks cross-account bug resolution: Operator B cannot resolve Operator A bug', async () => {
+    const tokenA = server.createSession({
+      id: 'human_admin',
+      email: 'carl@test.local',
+      name: 'Carl',
+      role: 'admin',
+    });
+    const tokenB = server.createSession({
+      id: 'human_vijaya_12345',
+      email: 'vijaya@test.local',
+      name: 'Vijaya',
+      role: 'collaborator',
+    });
+
+    // Operator A submits a bug
+    const postRes = await fetch(`${baseUrl}/api/bugs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({
+        title: 'Confidential Security Bug by Carl',
+        details: 'Zero knowledge handshake proof invalidation',
+      }),
+    });
+    const postJson = await postRes.json();
+    const carlBugId = postJson.bugId;
+
+    // Operator B attempts to resolve Operator A's bug -> 403 Forbidden
+    const unauthResolve = await fetch(`${baseUrl}/api/bugs/${carlBugId}/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenB}`,
+      },
+      body: JSON.stringify({ resolved: true, note: 'Malicious resolve attempt' }),
+    });
+    expect(unauthResolve.status).toBe(403);
+    const unauthJson = await unauthResolve.json();
+    expect(unauthJson.error).toBe('forbidden');
+
+    // Operator A successfully resolves their own bug -> 200 OK
+    const authResolve = await fetch(`${baseUrl}/api/bugs/${carlBugId}/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenA}`,
+      },
+      body: JSON.stringify({ resolved: true, note: 'Legitimately resolved by Carl' }),
+    });
+    expect(authResolve.status).toBe(200);
+    const authJson = await authResolve.json();
+    expect(authJson.bug.resolved).toBe(true);
+    expect(authJson.bug.resolvedBy).toBe('Carl');
+  });
+
+  it('7. Agent API Key queries only return bug reports belonging to the agent owner', async () => {
+    // Provision API key for Operator B
+    const apiKeyB = 'sec_apk_agent_vijaya_test';
+    server.apiKeys.set(apiKeyB, {
+      id: apiKeyB,
+      key: apiKeyB,
+      ownerHumanId: 'human_vijaya_12345',
+      createdAt: new Date().toISOString(),
+    });
+
+    // Agent owned by B queries bugs via Bearer API key
+    const agentList = await fetch(`${baseUrl}/api/bugs`, {
+      headers: { 'Authorization': `Bearer ${apiKeyB}` },
+    });
+    expect(agentList.status).toBe(200);
+    const json = await agentList.json();
+
+    // All bugs returned must belong to human_vijaya_12345
+    expect(json.bugs.length).toBeGreaterThanOrEqual(1);
+    for (const b of json.bugs) {
+      expect(b.submitterHumanId).toBe('human_vijaya_12345');
+    }
+  });
 });

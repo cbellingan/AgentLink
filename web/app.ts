@@ -1411,6 +1411,7 @@ function renderBugReports() {
             </div>
             <div style="font-size: 11px; color: var(--text-secondary); display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
               <span>🤖 Agent: <strong style="font-family: var(--font-mono); color: var(--accent);">${escapeHtml(b.agentId || 'anonymous')}</strong></span>
+              ${b.submitterEmail ? `<span>👤 Submitter: <strong style="color: var(--text-primary);">${escapeHtml(b.submitterEmail)}</strong></span>` : ''}
               <span>🕒 ${timeStr}</span>
               <span style="font-family: var(--font-mono); font-size: 10px;">ID: ${escapeHtml(b.id)}</span>
             </div>
@@ -1449,6 +1450,41 @@ const btnRefreshBugs = document.getElementById('btnRefreshBugs');
 const btnBugFilterOpen = document.getElementById('btnBugFilterOpen');
 const btnBugFilterAll = document.getElementById('btnBugFilterAll');
 const btnBugFilterResolved = document.getElementById('btnBugFilterResolved');
+
+const btnOpenReportBugModal = document.getElementById('btnOpenReportBugModal');
+const btnCloseReportBugModal = document.getElementById('btnCloseReportBugModal');
+const reportBugModal = document.getElementById('reportBugModal');
+const formReportBug = document.getElementById('formReportBug') as HTMLFormElement | null;
+
+btnOpenReportBugModal?.addEventListener('click', () => {
+  reportBugModal?.classList.remove('hidden');
+  (document.getElementById('bugReportTitle') as HTMLInputElement)?.focus();
+});
+
+btnCloseReportBugModal?.addEventListener('click', () => {
+  reportBugModal?.classList.add('hidden');
+});
+
+formReportBug?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = (document.getElementById('bugReportTitle') as HTMLInputElement)?.value.trim();
+  const severity = (document.getElementById('bugReportSeverity') as HTMLSelectElement)?.value || 'medium';
+  const details = (document.getElementById('bugReportDetails') as HTMLTextAreaElement)?.value.trim();
+
+  if (!title || !details) return;
+
+  try {
+    await apiRequest('/api/bugs', {
+      method: 'POST',
+      body: JSON.stringify({ title, severity, details }),
+    });
+    formReportBug.reset();
+    reportBugModal?.classList.add('hidden');
+    await refreshBugReports();
+  } catch (err: any) {
+    alert(`Failed to submit bug report: ${err.message}`);
+  }
+});
 
 btnRefreshBugs?.addEventListener('click', () => refreshBugReports());
 

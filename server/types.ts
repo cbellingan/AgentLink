@@ -111,6 +111,8 @@ export interface ClientLogEntry {
 export interface BugReportRecord {
   id: string;
   agentId?: string;
+  submitterHumanId?: string;
+  submitterEmail?: string;
   title: string;
   details: string;
   severity: 'low' | 'medium' | 'high' | 'critical';

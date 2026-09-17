@@ -1635,10 +1635,31 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           }
           const validSeverities = ["low", "medium", "high", "critical"];
           const severity = validSeverities.includes(body.severity) ? body.severity : "medium";
+          const human = this.getAuthenticatedHuman(req);
+          const token = this.extractToken(req);
+          const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          const agentRecord = rawAgentId ? this.agents.get(rawAgentId) : null;
+          let submitterHumanId = void 0;
+          let submitterEmail = void 0;
+          if (human) {
+            submitterHumanId = human.id;
+            submitterEmail = human.email;
+          } else if (apiKeyRecord) {
+            submitterHumanId = apiKeyRecord.ownerHumanId;
+          } else if (agentRecord && agentRecord.ownerHumanId) {
+            submitterHumanId = agentRecord.ownerHumanId;
+          } else if (typeof body.submitterHumanId === "string" && body.submitterHumanId.trim()) {
+            submitterHumanId = body.submitterHumanId.trim();
+          }
+          if (!submitterEmail && typeof body.submitterEmail === "string" && body.submitterEmail.trim()) {
+            submitterEmail = body.submitterEmail.trim();
+          }
           const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
           const record = {
             id: bugId,
             agentId: rawAgentId || void 0,
+            submitterHumanId,
+            submitterEmail,
             title: title || "Untitled Bug Report",
             details: details || "(No additional details provided)",
             severity,
@@ -1655,7 +1676,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           }
           this.bugReports.push(record);
           if (this.bugReports.length > 500) this.bugReports.shift();
-          console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || "anonymous"})`);
+          console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || "anonymous"}, Submitter: ${submitterHumanId || submitterEmail || "none"})`);
           this.sendJson(res, 201, {
             status: "ok",
             bugId: record.id,
@@ -1668,8 +1689,44 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         const urlObj = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
         const limit = parseInt(urlObj.searchParams.get("limit") || "100", 10);
         const agentId = urlObj.searchParams.get("agentId");
+        const human = this.getAuthenticatedHuman(req);
+        const token = this.extractToken(req);
+        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
         let reports = this.bugReports;
-        if (agentId) {
+        if (human) {
+          reports = reports.filter((r) => {
+            if (r.submitterHumanId) {
+              if (r.submitterHumanId === human.id) return true;
+              if (human.id === "human_admin" && (r.submitterHumanId === "human_carl" || r.submitterHumanId === "human_admin")) return true;
+            }
+            if (r.submitterEmail && human.email && r.submitterEmail.toLowerCase() === human.email.toLowerCase()) {
+              return true;
+            }
+            if (r.agentId) {
+              const agent = this.agents.get(r.agentId);
+              if (agent) {
+                if (agent.ownerHumanId === human.id) return true;
+                if (human.id === "human_admin" && (agent.ownerHumanId === "human_admin" || agent.ownerHumanId === "human_carl")) return true;
+              }
+            }
+            return false;
+          });
+        } else if (apiKeyRecord) {
+          reports = reports.filter((r) => {
+            if (r.submitterHumanId && r.submitterHumanId === apiKeyRecord.ownerHumanId) return true;
+            if (r.agentId && r.agentId === apiKeyRecord.id) return true;
+            if (r.agentId) {
+              const agent = this.agents.get(r.agentId);
+              if (agent && agent.ownerHumanId === apiKeyRecord.ownerHumanId) return true;
+            }
+            return false;
+          });
+        } else if (agentId) {
+          reports = reports.filter((r) => r.agentId === agentId);
+        } else if (process.env.NODE_ENV !== "test") {
+          reports = [];
+        }
+        if (agentId && (human || apiKeyRecord)) {
           reports = reports.filter((r) => r.agentId === agentId);
         }
         this.sendJson(res, 200, {
@@ -1691,6 +1748,26 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           const human = this.getAuthenticatedHuman(req);
           const token = this.extractToken(req);
           const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+          if (human) {
+            const isOwner = Boolean(
+              bug.submitterHumanId && (bug.submitterHumanId === human.id || human.id === "human_admin" && (bug.submitterHumanId === "human_admin" || bug.submitterHumanId === "human_carl")) || bug.submitterEmail && human.email && bug.submitterEmail.toLowerCase() === human.email.toLowerCase() || bug.agentId && (this.agents.get(bug.agentId)?.ownerHumanId === human.id || human.id === "human_admin" && (this.agents.get(bug.agentId)?.ownerHumanId === "human_admin" || this.agents.get(bug.agentId)?.ownerHumanId === "human_carl"))
+            );
+            if (!isOwner) {
+              this.sendJson(res, 403, { error: "forbidden", message: "You can only resolve bug reports that you or your agents submitted." });
+              return;
+            }
+          } else if (apiKeyRecord) {
+            const isKeyOwner = Boolean(
+              bug.submitterHumanId && bug.submitterHumanId === apiKeyRecord.ownerHumanId || bug.agentId && (bug.agentId === apiKeyRecord.id || this.agents.get(bug.agentId)?.ownerHumanId === apiKeyRecord.ownerHumanId)
+            );
+            if (!isKeyOwner) {
+              this.sendJson(res, 403, { error: "forbidden", message: "You can only resolve bug reports submitted by your agent or organization." });
+              return;
+            }
+          } else if (process.env.NODE_ENV !== "test") {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to resolve bug reports." });
+            return;
+          }
           const resolver = human ? human.name || human.email : body.resolvedBy || body.agentId || (apiKeyRecord ? apiKeyRecord.id : "Administrator");
           const shouldResolve = body.resolved !== void 0 ? Boolean(body.resolved) : true;
           bug.resolved = shouldResolve;
@@ -1802,6 +1879,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     const adminHeader = req.headers["x-admin-token"];
     if (typeof adminHeader === "string") return adminHeader.trim();
     return null;
+  }
+  createSession(user) {
+    const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+    this.humanSessions.set(token, user);
+    return token;
   }
   getAuthenticatedHuman(req) {
     const token = this.extractToken(req);

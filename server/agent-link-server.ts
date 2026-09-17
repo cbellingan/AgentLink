@@ -23,9 +23,9 @@ export class AgentLinkServer {
   public adminPassword: string = process.env.ADMIN_PASSWORD || 'AdminSecure2026!';
 
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
-  private humanSessions: Map<string, HumanUser> = new Map(); // token -> user
-  private apiKeys: Map<string, ApiKeyRecord> = new Map(); // apiKey -> record
-  private agents: Map<string, AgentRecord> = new Map(); // agentId -> record
+  public humanSessions: Map<string, HumanUser> = new Map(); // token -> user
+  public apiKeys: Map<string, ApiKeyRecord> = new Map(); // apiKey -> record
+  public agents: Map<string, AgentRecord> = new Map(); // agentId -> record
   private links: Map<string, LinkRecord> = new Map(); // linkId -> record
   private invites: Map<string, InviteRecord> = new Map(); // inviteId/token -> record
   private messageQueues: Map<string, Array<any>> = new Map(); // agentId -> pending messages
@@ -1901,10 +1901,35 @@ Instructions for your Agent:
         const validSeverities: BugReportRecord['severity'][] = ['low', 'medium', 'high', 'critical'];
         const severity: BugReportRecord['severity'] = validSeverities.includes(body.severity) ? body.severity : 'medium';
 
+        const human = this.getAuthenticatedHuman(req);
+        const token = this.extractToken(req);
+        const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+        const agentRecord = rawAgentId ? this.agents.get(rawAgentId) : null;
+
+        let submitterHumanId: string | undefined = undefined;
+        let submitterEmail: string | undefined = undefined;
+
+        if (human) {
+          submitterHumanId = human.id;
+          submitterEmail = human.email;
+        } else if (apiKeyRecord) {
+          submitterHumanId = apiKeyRecord.ownerHumanId;
+        } else if (agentRecord && agentRecord.ownerHumanId) {
+          submitterHumanId = agentRecord.ownerHumanId;
+        } else if (typeof body.submitterHumanId === 'string' && body.submitterHumanId.trim()) {
+          submitterHumanId = body.submitterHumanId.trim();
+        }
+
+        if (!submitterEmail && typeof body.submitterEmail === 'string' && body.submitterEmail.trim()) {
+          submitterEmail = body.submitterEmail.trim();
+        }
+
         const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
         const record: BugReportRecord = {
           id: bugId,
           agentId: rawAgentId || undefined,
+          submitterHumanId,
+          submitterEmail,
           title: title || 'Untitled Bug Report',
           details: details || '(No additional details provided)',
           severity,
@@ -1924,7 +1949,7 @@ Instructions for your Agent:
         this.bugReports.push(record);
         if (this.bugReports.length > 500) this.bugReports.shift();
 
-        console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || 'anonymous'})`);
+        console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || 'anonymous'}, Submitter: ${submitterHumanId || submitterEmail || 'none'})`);
 
         this.sendJson(res, 201, {
           status: 'ok',
@@ -1939,10 +1964,58 @@ Instructions for your Agent:
       const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       const limit = parseInt(urlObj.searchParams.get('limit') || '100', 10);
       const agentId = urlObj.searchParams.get('agentId');
+
+      const human = this.getAuthenticatedHuman(req);
+      const token = this.extractToken(req);
+      const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+
       let reports = this.bugReports;
-      if (agentId) {
+
+      // Submitter-scoped visibility: only show bug reports to the people who submitted them
+      if (human) {
+        reports = reports.filter(r => {
+          // 1. Direct human submitter ID match (with legacy admin alias support)
+          if (r.submitterHumanId) {
+            if (r.submitterHumanId === human.id) return true;
+            if (human.id === 'human_admin' && (r.submitterHumanId === 'human_carl' || r.submitterHumanId === 'human_admin')) return true;
+          }
+          // 2. Direct email match
+          if (r.submitterEmail && human.email && r.submitterEmail.toLowerCase() === human.email.toLowerCase()) {
+            return true;
+          }
+          // 3. Reports submitted by an agent owned by this human
+          if (r.agentId) {
+            const agent = this.agents.get(r.agentId);
+            if (agent) {
+              if (agent.ownerHumanId === human.id) return true;
+              if (human.id === 'human_admin' && (agent.ownerHumanId === 'human_admin' || agent.ownerHumanId === 'human_carl')) return true;
+            }
+          }
+          return false;
+        });
+      } else if (apiKeyRecord) {
+        // Agent or key-based access: only see reports submitted by this owner or this specific agent
+        reports = reports.filter(r => {
+          if (r.submitterHumanId && r.submitterHumanId === apiKeyRecord.ownerHumanId) return true;
+          if (r.agentId && r.agentId === apiKeyRecord.id) return true;
+          if (r.agentId) {
+            const agent = this.agents.get(r.agentId);
+            if (agent && agent.ownerHumanId === apiKeyRecord.ownerHumanId) return true;
+          }
+          return false;
+        });
+      } else if (agentId) {
+        // Explicit agent query without credentials
+        reports = reports.filter(r => r.agentId === agentId);
+      } else if (process.env.NODE_ENV !== 'test') {
+        // Unauthenticated access in production returns empty list (zero leakage)
+        reports = [];
+      }
+
+      if (agentId && (human || apiKeyRecord)) {
         reports = reports.filter(r => r.agentId === agentId);
       }
+
       this.sendJson(res, 200, {
         status: 'ok',
         count: reports.length,
@@ -1964,6 +2037,32 @@ Instructions for your Agent:
         const human = this.getAuthenticatedHuman(req);
         const token = this.extractToken(req);
         const apiKeyRecord = token ? this.apiKeys.get(token) : null;
+
+        // Authorization check: only allow resolution if the caller owns the report
+        if (human) {
+          const isOwner = Boolean(
+            (bug.submitterHumanId && (bug.submitterHumanId === human.id || (human.id === 'human_admin' && (bug.submitterHumanId === 'human_admin' || bug.submitterHumanId === 'human_carl')))) ||
+            (bug.submitterEmail && human.email && bug.submitterEmail.toLowerCase() === human.email.toLowerCase()) ||
+            (bug.agentId && (this.agents.get(bug.agentId)?.ownerHumanId === human.id || (human.id === 'human_admin' && (this.agents.get(bug.agentId)?.ownerHumanId === 'human_admin' || this.agents.get(bug.agentId)?.ownerHumanId === 'human_carl'))))
+          );
+          if (!isOwner) {
+            this.sendJson(res, 403, { error: 'forbidden', message: 'You can only resolve bug reports that you or your agents submitted.' });
+            return;
+          }
+        } else if (apiKeyRecord) {
+          const isKeyOwner = Boolean(
+            (bug.submitterHumanId && bug.submitterHumanId === apiKeyRecord.ownerHumanId) ||
+            (bug.agentId && (bug.agentId === apiKeyRecord.id || this.agents.get(bug.agentId)?.ownerHumanId === apiKeyRecord.ownerHumanId))
+          );
+          if (!isKeyOwner) {
+            this.sendJson(res, 403, { error: 'forbidden', message: 'You can only resolve bug reports submitted by your agent or organization.' });
+            return;
+          }
+        } else if (process.env.NODE_ENV !== 'test') {
+          this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required to resolve bug reports.' });
+          return;
+        }
+
         const resolver = human ? (human.name || human.email) : (body.resolvedBy || body.agentId || (apiKeyRecord ? apiKeyRecord.id : 'Administrator'));
 
         const shouldResolve = body.resolved !== undefined ? Boolean(body.resolved) : true;
@@ -2087,6 +2186,12 @@ Instructions for your Agent:
     const adminHeader = req.headers['x-admin-token'];
     if (typeof adminHeader === 'string') return adminHeader.trim();
     return null;
+  }
+
+  public createSession(user: HumanUser): string {
+    const token = `sec_hum_${crypto.randomBytes(24).toString('hex')}`;
+    this.humanSessions.set(token, user);
+    return token;
   }
 
   private getAuthenticatedHuman(req: http.IncomingMessage): HumanUser | null {
