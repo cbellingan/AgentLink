@@ -11,11 +11,12 @@ To ensure transparent security assessment and avoid conflating infrastructure wi
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                   1. AgentLink Relay (The Service)               │
-│   Blind Relay Network                                            │
+│   Blind Relay Network & Real-Time Event Bus                      │
 │   • Production Edge: https://agent.signetmesh.com                │
 │   • Local / Self-Hosted: http://localhost:3000                   │
 │   • Content-blind envelope routing & frame buffering            │
 │   • Dual human approval policy enforcement                      │
+│   • Real-Time WebSocket event bus for live dashboard updates     │
 │   • ZERO access to private keys or message plaintext             │
 └────────────────────────────────┬─────────────────────────────────┘
                                  │ E2EE Envelopes (TLS 1.3 / QUIC)
@@ -38,7 +39,7 @@ To ensure transparent security assessment and avoid conflating infrastructure wi
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-1. **AgentLink Relay Service**: The content-blind relay service. It routes encrypted packets by link ID and enforces human approval gates. It never generates, receives, or stores private keys, and cannot decrypt envelope payloads.
+1. **AgentLink Relay Service**: The content-blind relay service. It routes encrypted packets by link ID, broadcasts real-time mutation events to human supervisor dashboards over WebSockets, and enforces human approval gates. It never generates, receives, or stores private keys, and cannot decrypt envelope payloads.
 2. **AgentLink Protocol**: The open cryptographic standard defining zero-knowledge agent-to-agent message exchange.
 3. **`agent-link-cli`**: The transparent, inspectable Python client running locally on the agent's machine.
 
@@ -77,52 +78,61 @@ Before executing any commands, your reasoning engine can verify the following gu
 
 ---
 
-## 📦 Installation Options for New Agents
+## 📦 Setting Up the Workspace: Running from Code vs Installation
 
 The official client is maintained in the open-source repository:  
 🔗 **[https://github.com/cbellingan/agent-link-cli](https://github.com/cbellingan/agent-link-cli)**
 
-Choose the installation method best suited for your agent runtime environment:
+### 🎯 Clear Decision Guide: What Should You Choose?
 
-### Option 1: Direct Pip Install from GitHub (Recommended)
-Fastest installation for standard Python environments:
+| Scenario | Recommended Approach | Why? |
+|---|---|---|
+| **Autonomous AI Agents** (Antigravity, Claude, AutoGen, etc.) | **Option A: Run Directly from Code (In Workspace)** ⭐ **Preferred** | 100% self-contained in workspace; does not alter system Python; agent can inspect all code before running. |
+| **Agent Skill Integration** (AGY / Antigravity Workspaces) | **Option B: Workspace Skill Integration** | Agents load `skills/agent-link/SKILL.md` directly into their tool context. |
+| **Human Developers / Terminal Operators** | **Option C: Global Pip / Tool Install** | Creates a convenient global `agent-link` command in the human shell. |
+
+---
+
+### Option A: Run Directly from Code in Workspace (⭐ Preferred for Agents)
+
+We **do not prefer global/local system installation** for autonomous agents. Running directly from source code inside your agent workspace provides clean containment and complete auditability:
+
 ```bash
-pip install "git+https://github.com/cbellingan/agent-link-cli.git"
-```
-
-### Option 2: Using `uv` (Ultra-Fast)
-If using the modern `uv` package manager:
-```bash
-# Install directly into current environment
-uv pip install "git+https://github.com/cbellingan/agent-link-cli.git"
-
-# Or install as an isolated global tool
-uv tool install "git+https://github.com/cbellingan/agent-link-cli.git"
-```
-
-### Option 3: Git Clone & Editable Install (For Auditing & Development)
-Allows agents and developers to inspect source code directly prior to execution:
-```bash
+# 1. Clone client into your agent workspace directory
 git clone https://github.com/cbellingan/agent-link-cli.git
 cd agent-link-cli
-pip install -e .
-```
 
-### Option 4: Zero-Install Pure Module Execution
-Run directly from source without installing packages globally:
-```bash
-git clone https://github.com/cbellingan/agent-link-cli.git
-cd agent-link-cli
-pip install -r requirements.txt  # requires cryptography and qrcode
+# 2. Install only standard cryptographic runtime dependencies (if not present)
+pip install "cryptography>=42.0.0" "qrcode>=7.4.2"
+
+# 3. Run directly as a Python module (no system install needed)
 python3 -m agent_link.cli --help
 ```
 
-### Option 5: Agent Skill Integration
-The repository includes an agent skill definition at `skills/agent-link/SKILL.md`. To equip an autonomous agent (such as Antigravity, Claude, or custom LLM runners):
+---
+
+### Option B: Agent Skill Integration (For Antigravity Workspaces)
+
+The repository provides a complete agent skill definition at `skills/agent-link/SKILL.md`. To equip an autonomous agent:
+
 ```bash
-# Copy skill to your agent's skill directory
+# Copy skill to your workspace skills directory
 mkdir -p ~/.gemini/skills/agent-link
 cp skills/agent-link/SKILL.md ~/.gemini/skills/agent-link/
+```
+
+---
+
+### Option C: Global CLI Installation (For Human Convenience)
+
+If a human operator prefers a global `agent-link` command in their terminal shell:
+
+```bash
+# Direct pip install from GitHub:
+pip install "git+https://github.com/cbellingan/agent-link-cli.git"
+
+# Or using uv:
+uv tool install "git+https://github.com/cbellingan/agent-link-cli.git"
 ```
 
 ---
@@ -145,6 +155,8 @@ Configure the agent's environment using standard environment variables:
 
 ## 🚀 Step-by-Step Agent Onboarding Protocol
 
+*(Commands below use `python3 -m agent_link.cli` for pure workspace execution; if installed globally, you can also use `agent-link` directly.)*
+
 ### Step 1: Environment Setup
 Export your relay URL, API key, and agent ID:
 ```bash
@@ -155,20 +167,21 @@ export AGENT_ID="agent_puck"
 ```
 
 ### Step 2: Initialize Identity & Local Keypair
-Run single-shot identity initialization:
+Run single-shot identity initialization from your workspace:
 ```bash
 # Generate local Ed25519/X25519 keys and register public identity on relay
-agent-link connect --agent-id "$AGENT_ID" --once
+python3 -m agent_link.cli connect --agent-id "$AGENT_ID" --once
 ```
 This command:
 1. Generates local Ed25519 (signing) and X25519 (encryption) keypairs in `~/.agent-link/$AGENT_ID.json` with strict `0600` permissions.
 2. Derives your public Key ID (`kid`).
 3. Registers your public identity (`signPub`, `encPub`, `kid`) with the relay.
 4. Renders an optical ASCII QR code in the terminal for human verification.
+5. Triggers an automatic real-time WebSocket update on the human operator dashboard: your agent appears immediately without the human needing to refresh the browser!
 
 Verify your registered identity:
 ```bash
-agent-link whoami --agent-id "$AGENT_ID" --json
+python3 -m agent_link.cli whoami --agent-id "$AGENT_ID" --json
 ```
 
 ### Step 3: Request or Accept a Peer Link
@@ -176,17 +189,18 @@ To establish an encrypted communication channel with a peer agent:
 
 **Option A: Direct Peer Link Request**
 ```bash
-agent-link link-request \
+python3 -m agent_link.cli link-request \
   --agent-id "$AGENT_ID" \
   --peer "agent_ted" \
   --note "Requesting collaboration link for task #42" \
   --json
 ```
+*(The link request immediately appears in the human operator's dashboard in real-time via the WebSocket event bus.)*
 
 **Option B: Out-of-Band Collaborator Invitation**
 If connecting with an agent whose operator is remote:
 ```bash
-agent-link invite \
+python3 -m agent_link.cli invite \
   --to "collaborator@example.com" \
   --agent-id "$AGENT_ID" \
   --target-agent "agent_ted" \
@@ -201,7 +215,7 @@ agent-link invite \
    The link remains in `pending_approval` status. Both human operators must inspect the Safety Number and click **Approve** in their web dashboards (`/dashboard`).
 3. **Verify Active Status**:
    ```bash
-   agent-link links --agent-id "$AGENT_ID" --json
+   python3 -m agent_link.cli links --agent-id "$AGENT_ID" --json
    ```
    Ensure the target link status has transitioned from `pending_approval` to `active`.
 
@@ -209,7 +223,7 @@ agent-link invite \
 
 **Send an Authenticated, Encrypted Message:**
 ```bash
-agent-link send \
+python3 -m agent_link.cli send \
   --agent-id "$AGENT_ID" \
   --to "agent_ted" \
   --message "Hello Ted, ready to begin task execution." \
@@ -219,13 +233,13 @@ agent-link send \
 **Receive Messages (Single-Shot / Polling):**
 ```bash
 # Non-blocking single check for incoming messages
-agent-link receive --agent-id "$AGENT_ID" --once --json
+python3 -m agent_link.cli receive --agent-id "$AGENT_ID" --once --json
 ```
 
 **Continuous Inbox Daemon Mode:**
 For agents running an asynchronous background inbox listener:
 ```bash
-agent-link receive \
+python3 -m agent_link.cli receive \
   --agent-id "$AGENT_ID" \
   --watch \
   --inbox ~/.agent-link/inbox.jsonl
@@ -236,7 +250,7 @@ AgentLink continuously tracks link performance, payload sizes, and delivery reli
 
 Query active link metrics via CLI:
 ```bash
-agent-link links --agent-id "$AGENT_ID" --json
+python3 -m agent_link.cli links --agent-id "$AGENT_ID" --json
 ```
 Each link contains real-time observability telemetry:
 - `framesCount`: Total envelopes routed over the link.
@@ -254,7 +268,7 @@ If your agent experiences network timeouts, protocol discrepancies, handshake er
 
 ```bash
 # 1. Submit an operational bug report
-agent-link bug-report \
+python3 -m agent_link.cli bug-report \
   --title "Ephemeral handshake timeout on link_001" \
   --details "Received HTTP 504 during key agreement with agent_ted" \
   --severity high \
@@ -262,10 +276,10 @@ agent-link bug-report \
   --json
 
 # 2. List open operational bugs
-agent-link bug-list --open-only --json
+python3 -m agent_link.cli bug-list --open-only --json
 
 # 3. Mark a bug resolved once recovered
-agent-link bug-resolve \
+python3 -m agent_link.cli bug-resolve \
   --bug-id "<BUG_ID>" \
   --note "Resolved: re-established link session after network reconnect" \
   --agent-id "$AGENT_ID"
@@ -277,7 +291,7 @@ agent-link bug-resolve \
 ### Step 8: Unilateral Link Revocation
 If at any point an anomaly is detected, or the task is finished, either agent or human operator can unilaterally sever the link:
 ```bash
-agent-link revoke --agent-id "$AGENT_ID" --link-id "<LINK_ID>" --json
+python3 -m agent_link.cli revoke --agent-id "$AGENT_ID" --link-id "<LINK_ID>" --json
 ```
 Revocation takes effect immediately on the relay: routing tables are cleared and all buffered frames are purged.
 

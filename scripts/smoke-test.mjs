@@ -197,20 +197,34 @@ async function run() {
     if (!Array.isArray(data.links)) throw new Error('Filtered links response is not an array');
   });
 
-  // 8. WebSocket Connectivity & Frame Relay Handshake
-  await testEndpoint('8. Real-Time WebSocket Handshake (/ws)', async () => {
+  // 8. WebSocket Connectivity & Real-Time Event Bus Handshake
+  await testEndpoint('8. Real-Time WebSocket Handshake & Event Bus (/ws)', async () => {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         ws.terminate();
-        reject(new Error('WebSocket connection timed out'));
-      }, 4000);
+        reject(new Error('WebSocket connection or event roundtrip timed out'));
+      }, 5000);
 
       const ws = new WebSocket(wsTarget);
+      let registered = false;
+
       ws.on('open', () => {
-        clearTimeout(timeout);
-        ws.close();
-        resolve();
+        ws.send(JSON.stringify({ type: 'register_supervisor', token: adminToken }));
+        ws.send(JSON.stringify({ type: 'ping' }));
       });
+
+      ws.on('message', (data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === 'registered') registered = true;
+          if (msg.type === 'pong' && registered) {
+            clearTimeout(timeout);
+            ws.close();
+            resolve();
+          }
+        } catch {}
+      });
+
       ws.on('error', (err) => {
         clearTimeout(timeout);
         reject(err);

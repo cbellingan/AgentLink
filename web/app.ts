@@ -131,9 +131,11 @@ function unlockDashboard(user: any, token: string) {
   userEmail.textContent = user.email || '';
 
   refreshDashboard();
+  initDashboardWebSocket();
 }
 
 function lockLanding() {
+  closeDashboardWebSocket();
   sessionToken = '';
   currentUser = null;
   localStorage.removeItem('agentlink_token');
@@ -1715,6 +1717,139 @@ btnBugFilterResolved?.addEventListener('click', () => {
 
 async function refreshDashboard() {
   await Promise.all([refreshApiKeys(), refreshFleetAgents(), refreshInvites(), refreshPeerLinks(), refreshBugReports()]);
+}
+
+// 5b. Real-Time WebSocket Event Bus & Auto-Refresh Subsystem
+let dashboardWs: WebSocket | null = null;
+let wsReconnectTimer: any = null;
+let wsReconnectDelay = 1000;
+const debounceTimers: Record<string, any> = {};
+
+function debouncedRefresh(entity: string, fn: () => Promise<any>, delay = 150) {
+  if (debounceTimers[entity]) {
+    clearTimeout(debounceTimers[entity]);
+  }
+  debounceTimers[entity] = setTimeout(async () => {
+    delete debounceTimers[entity];
+    try {
+      await fn();
+    } catch (err) {
+      console.warn(`[WS] Failed debounced refresh for ${entity}:`, err);
+    }
+  }, delay);
+}
+
+function updateWsBadge(status: 'live' | 'reconnecting' | 'hidden') {
+  const badge = document.getElementById('wsStatusBadge');
+  if (!badge) return;
+  if (status === 'live') {
+    badge.style.display = 'inline-block';
+    badge.className = 'badge badge-success text-xs';
+    badge.textContent = '● Live';
+    badge.title = 'Real-time WebSocket event connection active';
+  } else if (status === 'reconnecting') {
+    badge.style.display = 'inline-block';
+    badge.className = 'badge badge-warning text-xs';
+    badge.textContent = '● Reconnecting';
+    badge.title = 'Reconnecting to real-time event bus...';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function initDashboardWebSocket() {
+  if (dashboardWs) {
+    try { dashboardWs.close(); } catch {}
+    dashboardWs = null;
+  }
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+  try {
+    dashboardWs = new WebSocket(wsUrl);
+
+    dashboardWs.onopen = () => {
+      wsReconnectDelay = 1000;
+      updateWsBadge('live');
+      dashboardWs?.send(JSON.stringify({
+        type: 'register_supervisor',
+        token: sessionToken,
+      }));
+    };
+
+    dashboardWs.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'ping') {
+          dashboardWs?.send(JSON.stringify({ type: 'pong' }));
+          return;
+        }
+        if (msg.type === 'agent_registered' || msg.type === 'agent_deregistered') {
+          debouncedRefresh('agents', refreshFleetAgents);
+        } else if (msg.type === 'link_requested' || msg.type === 'link_approved' || msg.type === 'link_revoked' || msg.type === 'link_updated') {
+          debouncedRefresh('links', refreshPeerLinks);
+        } else if (msg.type === 'message_sent') {
+          debouncedRefresh('links', refreshPeerLinks);
+          if (currentConvoLinkId && currentConvoLinkId === msg.linkId && !linkConversationModal.classList.contains('hidden')) {
+            refreshConversationFlow(currentConvoLinkId, false);
+          }
+        } else if (msg.type === 'bug_reported' || msg.type === 'bug_resolved') {
+          debouncedRefresh('bugs', refreshBugReports);
+        } else if (msg.type === 'invite_created' || msg.type === 'invite_claimed' || msg.type === 'invite_deleted') {
+          debouncedRefresh('invites', refreshInvites);
+        } else if (msg.type === 'key_created' || msg.type === 'key_deleted') {
+          debouncedRefresh('keys', refreshApiKeys);
+        } else if (msg.type === 'clean_slate') {
+          debouncedRefresh('dashboard', refreshDashboard);
+        }
+      } catch (e) {
+        console.warn('[WS] Error processing message:', e);
+      }
+    };
+
+    dashboardWs.onclose = () => {
+      if (!sessionToken) {
+        updateWsBadge('hidden');
+        return;
+      }
+      updateWsBadge('reconnecting');
+      scheduleWsReconnect();
+    };
+
+    dashboardWs.onerror = () => {
+      updateWsBadge('reconnecting');
+    };
+  } catch (err) {
+    console.warn('[WS] Connection error:', err);
+    scheduleWsReconnect();
+  }
+}
+
+function scheduleWsReconnect() {
+  if (wsReconnectTimer || !sessionToken) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 10000);
+    initDashboardWebSocket();
+    refreshDashboard(); // catch up on any missed updates
+  }, wsReconnectDelay);
+}
+
+function closeDashboardWebSocket() {
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  if (dashboardWs) {
+    try { dashboardWs.close(); } catch {}
+    dashboardWs = null;
+  }
+  updateWsBadge('hidden');
 }
 
 // 6. Initialization

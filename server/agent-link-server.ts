@@ -36,6 +36,7 @@ export class AgentLinkServer {
   private bugLogPath: string;
   private bugRateLimits: Map<string, number[]> = new Map(); // key -> timestamps
   private supervisorSockets: Set<WebSocket> = new Set();
+  private wsHeartbeatInterval: NodeJS.Timeout | null = null;
   private stateFilePath: string;
   private lastKeySaveTime: number = 0;
 
@@ -571,6 +572,11 @@ Instructions for your Agent:
         const actualPort = typeof addr === 'object' && addr ? addr.port : this.port;
         this.port = actualPort;
         console.log(`[AgentLink Server] Listening on http://localhost:${actualPort}`);
+        if (process.env.NODE_ENV !== 'test') {
+          this.wsHeartbeatInterval = setInterval(() => {
+            this.notifySupervisors({ type: 'ping' });
+          }, 25000);
+        }
         resolve(actualPort);
       });
 
@@ -580,6 +586,14 @@ Instructions for your Agent:
 
   public async close(): Promise<void> {
     return new Promise((resolve) => {
+      if (this.wsHeartbeatInterval) {
+        clearInterval(this.wsHeartbeatInterval);
+        this.wsHeartbeatInterval = null;
+      }
+      for (const ws of this.supervisorSockets) {
+        try { ws.close(); } catch {}
+      }
+      this.supervisorSockets.clear();
       this.wss?.close();
       if (this.server) {
         this.server.close(() => resolve());
@@ -1027,6 +1041,7 @@ Instructions for your Agent:
 
         this.apiKeys.set(keyVal, keyRecord);
         this.saveState();
+        this.notifySupervisors({ type: 'key_created', keyId: keyRecord.id });
 
         setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
         this.sendJson(res, 201, { status: 'ok', apiKey: keyRecord });
@@ -1081,7 +1096,10 @@ Instructions for your Agent:
           break;
         }
       }
-      if (deleted) this.saveState();
+      if (deleted) {
+        this.saveState();
+        this.notifySupervisors({ type: 'key_deleted', keyId });
+      }
 
       this.sendJson(res, 200, { status: 'ok', deleted });
       return;
@@ -1210,6 +1228,10 @@ Instructions for your Agent:
         this.invites.set(inviteId, inviteRecord);
         this.invites.set(inviteToken, inviteRecord);
         this.saveState();
+        this.notifySupervisors({ type: 'invite_created', inviteId: inviteRecord.id, linkId: createdLinkId });
+        if (createdLinkId) {
+          this.notifySupervisors({ type: 'link_requested', linkId: createdLinkId });
+        }
 
         const inviteUrl = `${proto}://${host}/?invite=${inviteToken}`;
 
@@ -1288,7 +1310,10 @@ Instructions for your Agent:
           deleted = true;
         }
       }
-      if (deleted) this.saveState();
+      if (deleted) {
+        this.saveState();
+        this.notifySupervisors({ type: 'invite_deleted', inviteId });
+      }
       this.sendJson(res, 200, { status: 'ok', deleted });
       return;
     }
@@ -1689,6 +1714,7 @@ Instructions for your Agent:
         };
         this.links.set(linkId, record);
         this.saveState();
+        this.notifySupervisors({ type: 'link_requested', linkId: record.id, link: record, safetyNumber });
         this.sendJson(res, 200, { status: 'ok', linkId: record.id, link: record, safetyNumber, agentPrompt });
       });
       return;
@@ -1921,6 +1947,7 @@ Instructions for your Agent:
           if (targetAgent) targetAgent.peerVerification = body.peerVerification;
         }
         this.saveState();
+        this.notifySupervisors({ type: 'link_approved', linkId: link.id, link, status: link.status });
         this.sendJson(res, 200, { status: 'ok', linkId: link.id, link });
       });
       return;
@@ -1951,7 +1978,10 @@ Instructions for your Agent:
       }
 
       const existed = this.links.delete(linkId);
-      if (existed) this.saveState();
+      if (existed) {
+        this.saveState();
+        this.notifySupervisors({ type: 'link_revoked', linkId });
+      }
       this.sendJson(res, 200, { status: 'ok', severed: existed });
       return;
     }
@@ -2030,6 +2060,7 @@ Instructions for your Agent:
             });
             if (link.recentMessages.length > 100) link.recentMessages.shift();
             this.saveState();
+            this.notifySupervisors({ type: 'message_sent', linkId, senderId, targetId, seq });
           }
 
           const senderAgent = this.agents.get(senderId);
@@ -2200,6 +2231,7 @@ Instructions for your Agent:
 
         this.bugReports.push(record);
         if (this.bugReports.length > 500) this.bugReports.shift();
+        this.notifySupervisors({ type: 'bug_reported', bugId: record.id, bug: record });
 
         console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || 'anonymous'}, Submitter: ${submitterHumanId || submitterEmail || 'none'})`);
 
@@ -2339,6 +2371,7 @@ Instructions for your Agent:
         }
 
         console.log(`[BUG REPORT ${shouldResolve ? 'RESOLVED' : 'REOPENED'}] ${bug.id} by ${resolver}`);
+        this.notifySupervisors({ type: 'bug_resolved', bugId: bug.id, bug });
         this.sendJson(res, 200, { status: 'ok', bug });
       });
       return;
@@ -2412,6 +2445,13 @@ Instructions for your Agent:
         const msg = JSON.parse(data.toString());
         if (msg.type === 'register_supervisor') {
           this.supervisorSockets.add(ws);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'registered', status: 'ok', timestamp: new Date().toISOString() }));
+          }
+        } else if (msg.type === 'ping') {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
+          }
         }
       } catch {}
     });
@@ -2419,14 +2459,31 @@ Instructions for your Agent:
     ws.on('close', () => {
       this.supervisorSockets.delete(ws);
     });
+
+    ws.on('error', () => {
+      this.supervisorSockets.delete(ws);
+    });
   }
 
-  private notifySupervisors(event: any): void {
+  public notifySupervisors(event: any): void {
+    if (!event.timestamp) {
+      event.timestamp = new Date().toISOString();
+    }
     const raw = JSON.stringify(event);
+    const toDelete: WebSocket[] = [];
     for (const ws of this.supervisorSockets) {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(raw);
+        try {
+          ws.send(raw);
+        } catch {
+          toDelete.push(ws);
+        }
+      } else {
+        toDelete.push(ws);
       }
+    }
+    for (const dead of toDelete) {
+      this.supervisorSockets.delete(dead);
     }
   }
 
