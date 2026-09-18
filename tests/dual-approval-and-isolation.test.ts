@@ -510,12 +510,25 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     expect(a2.status).toBe(200);
     expect(a2.data.link.status).toBe('active');
 
-    // Now Agent Bob rotates its keys
+    // Now Agent Bob attempts unauthorized key rotation (rejected with 409)
+    const unauthRotate = await apiPost('/api/agents', {
+      agentId: 'agent-bob',
+      ownerHumanId: wifeId,
+      kid: 'kid-bob-rotated-999',
+      signPub: 'bob_sign_pub_key_rotated',
+      encPub: 'bob_enc_pub_key_rotated',
+    }, wifeApiKey);
+    expect(unauthRotate.status).toBe(409);
+    expect(unauthRotate.data.error).toBe('key_rotation_requires_authorization');
+
+    // Authorized key rotation succeeds
     const rotateRes = await apiPost('/api/agents', {
       agentId: 'agent-bob',
       ownerHumanId: wifeId,
       kid: 'kid-bob-rotated-999',
-      signingPublicKey: 'b64_new_key',
+      signPub: 'bob_sign_pub_key_rotated',
+      encPub: 'bob_enc_pub_key_rotated',
+      allowRotation: true,
     }, wifeApiKey);
     expect(rotateRes.status).toBe(200);
 

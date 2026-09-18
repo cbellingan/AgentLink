@@ -15,6 +15,18 @@ export interface ApiKeyRecord {
   lastUsedAt?: string;
 }
 
+export interface KeyRotationEntry {
+  timestamp: string;
+  actor: string;
+  previousKid?: string;
+  previousSignPub?: string;
+  previousEncPub?: string;
+  newKid: string;
+  newSignPub?: string;
+  newEncPub?: string;
+  authorizationType: 'human_admin' | 'previous_key_signature' | 'human_session' | 'authorized_key_rotation';
+}
+
 export interface AgentRecord {
   id: string;
   ownerHumanId: string;
@@ -27,6 +39,7 @@ export interface AgentRecord {
   polling: boolean;
   lastSeen: string;
   peerVerification?: any;
+  rotations?: KeyRotationEntry[];
 }
 
 export interface LinkMessageEntry {

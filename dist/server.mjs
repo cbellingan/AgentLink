@@ -37,6 +37,7 @@ var AgentLinkServer = class {
   bugRateLimits = /* @__PURE__ */ new Map();
   // key -> timestamps
   supervisorSockets = /* @__PURE__ */ new Set();
+  wsHeartbeatInterval = null;
   stateFilePath;
   lastKeySaveTime = 0;
   constructor(port2 = 3e3, staticPath2) {
@@ -290,6 +291,9 @@ var AgentLinkServer = class {
 ${opts.note ? `- Purpose / Note: ${opts.note}
 ` : ""}
 Instructions for your Agent:
+0. Prerequisites & Credentials:
+   Ask your human operator for an AgentLink API key from their dashboard and set it in your environment:
+   export AGENTLINK_API_KEY="<YOUR_API_KEY>"
 1. Review technical & security specification:
    ${onboardingUrl}
 2. Initialize local cryptographic identity and connect:
@@ -297,7 +301,12 @@ Instructions for your Agent:
 3. Check approved link status with '${opts.peerAgentId}':
    python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
 4. Send an end-to-end encrypted message once link is approved:
-   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}"`;
+   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
+5. Receive messages / listen for replies:
+   # Single-shot check:
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --once --json
+   # Or continuous inbox listener daemon:
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --watch --inbox ~/.agent-link/inbox.jsonl`;
   }
   discoverLocalAgents() {
     if (process.env.NODE_ENV === "test") {
@@ -506,6 +515,11 @@ Instructions for your Agent:
         const actualPort = typeof addr === "object" && addr ? addr.port : this.port;
         this.port = actualPort;
         console.log(`[AgentLink Server] Listening on http://localhost:${actualPort}`);
+        if (process.env.NODE_ENV !== "test") {
+          this.wsHeartbeatInterval = setInterval(() => {
+            this.notifySupervisors({ type: "ping" });
+          }, 25e3);
+        }
         resolve(actualPort);
       });
       this.server.on("error", reject);
@@ -513,6 +527,17 @@ Instructions for your Agent:
   }
   async close() {
     return new Promise((resolve) => {
+      if (this.wsHeartbeatInterval) {
+        clearInterval(this.wsHeartbeatInterval);
+        this.wsHeartbeatInterval = null;
+      }
+      for (const ws of this.supervisorSockets) {
+        try {
+          ws.close();
+        } catch {
+        }
+      }
+      this.supervisorSockets.clear();
       this.wss?.close();
       if (this.server) {
         this.server.close(() => resolve());
@@ -888,6 +913,7 @@ Instructions for your Agent:
           };
           this.apiKeys.set(keyVal, keyRecord);
           this.saveState();
+          this.notifySupervisors({ type: "key_created", keyId: keyRecord.id });
           setSecurityNote(`API KEY GENERATED: ${keyRecord.id} for ${human.email}`);
           this.sendJson(res, 201, { status: "ok", apiKey: keyRecord });
         });
@@ -934,7 +960,10 @@ Instructions for your Agent:
             break;
           }
         }
-        if (deleted) this.saveState();
+        if (deleted) {
+          this.saveState();
+          this.notifySupervisors({ type: "key_deleted", keyId });
+        }
         this.sendJson(res, 200, { status: "ok", deleted });
         return;
       }
@@ -1045,6 +1074,10 @@ Instructions for your Agent:
           this.invites.set(inviteId, inviteRecord);
           this.invites.set(inviteToken, inviteRecord);
           this.saveState();
+          this.notifySupervisors({ type: "invite_created", inviteId: inviteRecord.id, linkId: createdLinkId });
+          if (createdLinkId) {
+            this.notifySupervisors({ type: "link_requested", linkId: createdLinkId });
+          }
           const inviteUrl = `${proto}://${host}/?invite=${inviteToken}`;
           const emailTemplate = {
             subject: `AgentLink Connection Request from ${senderLabel}`,
@@ -1120,7 +1153,10 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             deleted = true;
           }
         }
-        if (deleted) this.saveState();
+        if (deleted) {
+          this.saveState();
+          this.notifySupervisors({ type: "invite_deleted", inviteId });
+        }
         this.sendJson(res, 200, { status: "ok", deleted });
         return;
       }
@@ -1151,17 +1187,80 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           } else if (body.ownerHumanId) {
             ownerHumanId = body.ownerHumanId;
           }
+          const existing = this.agents.get(agentId);
+          let keyRotated = false;
+          if (existing) {
+            if (existing.ownerHumanId && existing.ownerHumanId !== ownerHumanId && !isAdmin) {
+              setSecurityNote(`AGENT REGISTRATION REJECTED: Cross-owner registration attempt for agent '${agentId}' by ${ownerHumanId}`);
+              this.sendJson(res, 409, {
+                error: "agent_id_taken",
+                message: `Agent ID '${agentId}' is already registered by another human owner`
+              });
+              return;
+            }
+            const keysMatch = (!body.signPub || body.signPub === existing.signPub) && (!body.encPub || body.encPub === existing.encPub) && (!body.kid || body.kid === existing.kid);
+            if (!keysMatch && existing.signPub) {
+              let authorized = isAdmin || Boolean(humanSession && humanSession.id === existing.ownerHumanId) || body.allowRotation === true && apiKeyRecord && apiKeyRecord.ownerHumanId === existing.ownerHumanId;
+              let authType = isAdmin ? "human_admin" : humanSession ? "human_session" : body.rotationSignature ? "previous_key_signature" : "authorized_key_rotation";
+              if (!authorized && body.rotationSignature && existing.signPub) {
+                try {
+                  const msg = Buffer.from(`${agentId}:${body.signPub}:${body.encPub}:${body.kid}`, "utf8");
+                  const prevPubKeyDer = Buffer.concat([
+                    Buffer.from("302a300506032b6570032100", "hex"),
+                    Buffer.from(existing.signPub, "base64")
+                  ]);
+                  const prevKey = crypto.createPublicKey({
+                    key: prevPubKeyDer,
+                    format: "der",
+                    type: "spki"
+                  });
+                  const sig = Buffer.from(body.rotationSignature, "base64");
+                  authorized = crypto.verify(null, msg, prevKey, sig);
+                  if (authorized) {
+                    authType = "previous_key_signature";
+                  }
+                } catch (err) {
+                  console.warn(`[AgentLink Security] Key rotation signature verification failed for '${agentId}':`, err);
+                  authorized = false;
+                }
+              }
+              if (!authorized) {
+                setSecurityNote(`AGENT REGISTRATION REJECTED: Unauthorized key rotation attempt for '${agentId}'`);
+                this.sendJson(res, 409, {
+                  error: "key_rotation_requires_authorization",
+                  message: `Agent ID '${agentId}' is already registered with differing cryptographic keys. Re-registering with new keys requires human owner authorization or a cryptographic rotationSignature from the previous signing key.`,
+                  currentKid: existing.kid
+                });
+                return;
+              }
+              keyRotated = true;
+              const rotationEntry = {
+                timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+                actor: humanSession?.email || (apiKeyRecord ? apiKeyRecord.label || apiKeyRecord.id : ownerHumanId),
+                previousKid: existing.kid,
+                previousSignPub: existing.signPub,
+                previousEncPub: existing.encPub,
+                newKid: body.kid || existing.kid || "unknown",
+                newSignPub: body.signPub,
+                newEncPub: body.encPub,
+                authorizationType: authType
+              };
+              existing.rotations = [...existing.rotations || [], rotationEntry];
+            }
+          }
           const agentRecord = {
             id: agentId,
-            ownerHumanId,
-            registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
-            signPub: body.signPub,
-            encPub: body.encPub,
-            kid: body.kid,
-            qrPayload: body.qrPayload,
+            ownerHumanId: existing?.ownerHumanId || ownerHumanId,
+            registeredAt: existing?.registeredAt || (/* @__PURE__ */ new Date()).toISOString(),
+            signPub: body.signPub || existing?.signPub,
+            encPub: body.encPub || existing?.encPub,
+            kid: body.kid || existing?.kid,
+            qrPayload: body.qrPayload || existing?.qrPayload,
             connected: false,
             polling: true,
-            lastSeen: (/* @__PURE__ */ new Date()).toISOString()
+            lastSeen: (/* @__PURE__ */ new Date()).toISOString(),
+            peerVerification: existing?.peerVerification,
+            rotations: existing?.rotations
           };
           this.agents.set(agentId, agentRecord);
           if (!this.messageQueues.has(agentId)) {
@@ -1453,6 +1552,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           };
           this.links.set(linkId, record);
           this.saveState();
+          this.notifySupervisors({ type: "link_requested", linkId: record.id, link: record, safetyNumber });
           this.sendJson(res, 200, { status: "ok", linkId: record.id, link: record, safetyNumber, agentPrompt });
         });
         return;
@@ -1642,6 +1742,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             if (targetAgent) targetAgent.peerVerification = body.peerVerification;
           }
           this.saveState();
+          this.notifySupervisors({ type: "link_approved", linkId: link.id, link, status: link.status });
           this.sendJson(res, 200, { status: "ok", linkId: link.id, link });
         });
         return;
@@ -1664,7 +1765,10 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           return;
         }
         const existed = this.links.delete(linkId);
-        if (existed) this.saveState();
+        if (existed) {
+          this.saveState();
+          this.notifySupervisors({ type: "link_revoked", linkId });
+        }
         this.sendJson(res, 200, { status: "ok", severed: existed });
         return;
       }
@@ -1731,6 +1835,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               });
               if (link.recentMessages.length > 100) link.recentMessages.shift();
               this.saveState();
+              this.notifySupervisors({ type: "message_sent", linkId, senderId, targetId, seq });
             }
             const senderAgent = this.agents.get(senderId);
             const q = this.messageQueues.get(targetId) || [];
@@ -1873,6 +1978,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           }
           this.bugReports.push(record);
           if (this.bugReports.length > 500) this.bugReports.shift();
+          this.notifySupervisors({ type: "bug_reported", bugId: record.id, bug: record });
           console.log(`[BUG REPORT] ${record.id} [${record.severity.toUpperCase()}] ${record.title} (Agent: ${record.agentId || "anonymous"}, Submitter: ${submitterHumanId || submitterEmail || "none"})`);
           this.sendJson(res, 201, {
             status: "ok",
@@ -1985,6 +2091,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             console.error("[BUG-LOG ERROR] Failed to sync bug resolution:", err);
           }
           console.log(`[BUG REPORT ${shouldResolve ? "RESOLVED" : "REOPENED"}] ${bug.id} by ${resolver}`);
+          this.notifySupervisors({ type: "bug_resolved", bugId: bug.id, bug });
           this.sendJson(res, 200, { status: "ok", bug });
         });
         return;
@@ -2052,6 +2159,13 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         const msg = JSON.parse(data.toString());
         if (msg.type === "register_supervisor") {
           this.supervisorSockets.add(ws);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "registered", status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() }));
+          }
+        } else if (msg.type === "ping") {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "pong", timestamp: (/* @__PURE__ */ new Date()).toISOString() }));
+          }
         }
       } catch {
       }
@@ -2059,13 +2173,29 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     ws.on("close", () => {
       this.supervisorSockets.delete(ws);
     });
+    ws.on("error", () => {
+      this.supervisorSockets.delete(ws);
+    });
   }
   notifySupervisors(event) {
+    if (!event.timestamp) {
+      event.timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    }
     const raw = JSON.stringify(event);
+    const toDelete = [];
     for (const ws of this.supervisorSockets) {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(raw);
+        try {
+          ws.send(raw);
+        } catch {
+          toDelete.push(ws);
+        }
+      } else {
+        toDelete.push(ws);
       }
+    }
+    for (const dead of toDelete) {
+      this.supervisorSockets.delete(dead);
     }
   }
   extractToken(req) {

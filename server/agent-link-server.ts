@@ -8,7 +8,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
-import { HumanUser, ApiKeyRecord, AgentRecord, LinkRecord, LinkMetrics, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
+import { HumanUser, ApiKeyRecord, AgentRecord, KeyRotationEntry, LinkRecord, LinkMetrics, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -327,6 +327,9 @@ export class AgentLinkServer {
 - Mutual Safety Number: ${opts.safetyNumber}
 ${opts.note ? `- Purpose / Note: ${opts.note}\n` : ''}
 Instructions for your Agent:
+0. Prerequisites & Credentials:
+   Ask your human operator for an AgentLink API key from their dashboard and set it in your environment:
+   export AGENTLINK_API_KEY="<YOUR_API_KEY>"
 1. Review technical & security specification:
    ${onboardingUrl}
 2. Initialize local cryptographic identity and connect:
@@ -334,7 +337,12 @@ Instructions for your Agent:
 3. Check approved link status with '${opts.peerAgentId}':
    python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
 4. Send an end-to-end encrypted message once link is approved:
-   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}"`;
+   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
+5. Receive messages / listen for replies:
+   # Single-shot check:
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --once --json
+   # Or continuous inbox listener daemon:
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --watch --inbox ~/.agent-link/inbox.jsonl`;
   }
 
   private discoverLocalAgents(): void {
@@ -1350,17 +1358,96 @@ Instructions for your Agent:
           ownerHumanId = body.ownerHumanId;
         }
 
+        const existing = this.agents.get(agentId);
+        let keyRotated = false;
+
+        if (existing) {
+          // 1. Cross-owner hijacking prevention
+          if (existing.ownerHumanId && existing.ownerHumanId !== ownerHumanId && !isAdmin) {
+            setSecurityNote(`AGENT REGISTRATION REJECTED: Cross-owner registration attempt for agent '${agentId}' by ${ownerHumanId}`);
+            this.sendJson(res, 409, {
+              error: 'agent_id_taken',
+              message: `Agent ID '${agentId}' is already registered by another human owner`,
+            });
+            return;
+          }
+
+          // 2. Key rotation check
+          const keysMatch = (
+            (!body.signPub || body.signPub === existing.signPub) &&
+            (!body.encPub || body.encPub === existing.encPub) &&
+            (!body.kid || body.kid === existing.kid)
+          );
+
+          if (!keysMatch && existing.signPub) {
+            // New keys are being provided for an already-registered agent identity
+            let authorized = isAdmin || Boolean(humanSession && humanSession.id === existing.ownerHumanId) || (body.allowRotation === true && apiKeyRecord && apiKeyRecord.ownerHumanId === existing.ownerHumanId);
+            let authType: 'human_admin' | 'previous_key_signature' | 'human_session' | 'authorized_key_rotation' = isAdmin
+              ? 'human_admin'
+              : (humanSession ? 'human_session' : (body.rotationSignature ? 'previous_key_signature' : 'authorized_key_rotation'));
+
+            if (!authorized && body.rotationSignature && existing.signPub) {
+              try {
+                const msg = Buffer.from(`${agentId}:${body.signPub}:${body.encPub}:${body.kid}`, 'utf8');
+                const prevPubKeyDer = Buffer.concat([
+                  Buffer.from('302a300506032b6570032100', 'hex'),
+                  Buffer.from(existing.signPub, 'base64'),
+                ]);
+                const prevKey = crypto.createPublicKey({
+                  key: prevPubKeyDer,
+                  format: 'der',
+                  type: 'spki',
+                });
+                const sig = Buffer.from(body.rotationSignature, 'base64');
+                authorized = crypto.verify(null, msg, prevKey, sig);
+                if (authorized) {
+                  authType = 'previous_key_signature';
+                }
+              } catch (err) {
+                console.warn(`[AgentLink Security] Key rotation signature verification failed for '${agentId}':`, err);
+                authorized = false;
+              }
+            }
+
+            if (!authorized) {
+              setSecurityNote(`AGENT REGISTRATION REJECTED: Unauthorized key rotation attempt for '${agentId}'`);
+              this.sendJson(res, 409, {
+                error: 'key_rotation_requires_authorization',
+                message: `Agent ID '${agentId}' is already registered with differing cryptographic keys. Re-registering with new keys requires human owner authorization or a cryptographic rotationSignature from the previous signing key.`,
+                currentKid: existing.kid,
+              });
+              return;
+            }
+
+            keyRotated = true;
+            const rotationEntry: KeyRotationEntry = {
+              timestamp: new Date().toISOString(),
+              actor: humanSession?.email || (apiKeyRecord ? apiKeyRecord.label || apiKeyRecord.id : ownerHumanId),
+              previousKid: existing.kid,
+              previousSignPub: existing.signPub,
+              previousEncPub: existing.encPub,
+              newKid: body.kid || existing.kid || 'unknown',
+              newSignPub: body.signPub,
+              newEncPub: body.encPub,
+              authorizationType: authType,
+            };
+            existing.rotations = [...(existing.rotations || []), rotationEntry];
+          }
+        }
+
         const agentRecord: AgentRecord = {
           id: agentId,
-          ownerHumanId,
-          registeredAt: new Date().toISOString(),
-          signPub: body.signPub,
-          encPub: body.encPub,
-          kid: body.kid,
-          qrPayload: body.qrPayload,
+          ownerHumanId: existing?.ownerHumanId || ownerHumanId,
+          registeredAt: existing?.registeredAt || new Date().toISOString(),
+          signPub: body.signPub || existing?.signPub,
+          encPub: body.encPub || existing?.encPub,
+          kid: body.kid || existing?.kid,
+          qrPayload: body.qrPayload || existing?.qrPayload,
           connected: false,
           polling: true,
           lastSeen: new Date().toISOString(),
+          peerVerification: existing?.peerVerification,
+          rotations: existing?.rotations,
         };
 
         this.agents.set(agentId, agentRecord);
