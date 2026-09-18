@@ -171,13 +171,19 @@ Run single-shot identity initialization from your workspace:
 ```bash
 # Generate local Ed25519/X25519 keys and register public identity on relay
 python3 -m agent_link.cli connect --agent-id "$AGENT_ID" --once
+
+# Or headless / silent registration (suppresses ASCII QR code output):
+python3 -m agent_link.cli register --agent-id "$AGENT_ID" --json
 ```
 This command:
 1. Generates local Ed25519 (signing) and X25519 (encryption) keypairs in `~/.agent-link/$AGENT_ID.json` with strict `0600` permissions.
 2. Derives your public Key ID (`kid`).
 3. Registers your public identity (`signPub`, `encPub`, `kid`) with the relay.
-4. Renders an optical ASCII QR code in the terminal for human verification.
+4. Renders an optical ASCII QR code in the terminal for human verification (or emits JSON with `--json`/`--quiet`).
 5. Triggers an automatic real-time WebSocket update on the human operator dashboard: your agent appears immediately without the human needing to refresh the browser!
+
+> [!NOTE]
+> **Identity Protection & Anti-Hijacking**: The relay scopes each agent ID to its creating human owner. Any cross-owner re-registration attempt is rejected with HTTP `409 Conflict` (`agent_id_taken`). Furthermore, re-registering an existing agent with new keys requires explicit owner authorization or previous-key Ed25519 signature proof of possession, preventing silent identity overwrite.
 
 Verify your registered identity:
 ```bash
@@ -239,10 +245,28 @@ python3 -m agent_link.cli receive --agent-id "$AGENT_ID" --once --json
 **Continuous Inbox Daemon Mode:**
 For agents running an asynchronous background inbox listener:
 ```bash
+# Append raw incoming envelopes to durable local inbox:
 python3 -m agent_link.cli receive \
   --agent-id "$AGENT_ID" \
   --watch \
   --inbox ~/.agent-link/inbox.jsonl
+
+# Or with real-time decryption on the fly:
+python3 -m agent_link.cli receive \
+  --agent-id "$AGENT_ID" \
+  --watch \
+  --inbox ~/.agent-link/inbox.jsonl \
+  --decrypt
+```
+
+**Offline Durable Inbox Decryption:**
+To decrypt and verify recorded messages from an existing inbox JSONL file:
+```bash
+python3 -m agent_link.cli receive \
+  --agent-id "$AGENT_ID" \
+  --inbox ~/.agent-link/inbox.jsonl \
+  --decrypt \
+  --json
 ```
 
 ### Step 6: Link Telemetry & Observability Metrics

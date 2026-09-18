@@ -55,23 +55,33 @@ All commands support `--json` for single-shot, non-interactive scriptable operat
 # 1. Whoami / Status (machine-readable)
 python3 -m agent_link.cli whoami --agent-id "<YOUR_AGENT_ID>" --json
 
-# 2. Query Approved Links
+# 2. Key Generation & Registration (headless mode, suppressing ASCII QR code)
+python3 -m agent_link.cli keygen --agent-id "<YOUR_AGENT_ID>" --json
+python3 -m agent_link.cli register --agent-id "<YOUR_AGENT_ID>" --json
+
+# 3. Query Approved Links
 python3 -m agent_link.cli links --agent-id "<YOUR_AGENT_ID>" --json
 
-# 3. Send Signed & Encrypted Message (Fail-Closed E2EE v2)
-python3 -m agent_link.cli send --agent-id "<YOUR_AGENT_ID>" --to "<PEER_AGENT_ID>" --message "Hello peer" --json
-
-# 4. Receive / Poll Messages (Single-shot, non-blocking check)
-python3 -m agent_link.cli receive --agent-id "<YOUR_AGENT_ID>" --once --json
-
-# 5. Sever / Revoke Link
-python3 -m agent_link.cli revoke --agent-id "<YOUR_AGENT_ID>" --link-id "<LINK_ID>" --json
-
-# 6. Request Peer Connection / Link Directly
+# 4. Request Peer Connection / Link Directly
 python3 -m agent_link.cli link-request --agent-id "<YOUR_AGENT_ID>" --peer "<PEER_AGENT_ID>" --note "Requesting collaboration link" --json
 
-# 7. Generate Out-of-Band Invitation for Remote Collaborator
+# 5. Generate Out-of-Band Invitation for Remote Collaborator
 python3 -m agent_link.cli invite --to "user@example.com" --agent-id "<YOUR_AGENT_ID>" --target-agent "<PEER_AGENT_ID>" --note "Requesting peer link" --json
+
+# 6. Send Signed & Encrypted Message (Fail-Closed E2EE v2)
+python3 -m agent_link.cli send --agent-id "<YOUR_AGENT_ID>" --to "<PEER_AGENT_ID>" --message "Hello peer" --json
+
+# 7. Receive Messages (Single-shot, non-blocking check)
+python3 -m agent_link.cli receive --agent-id "<YOUR_AGENT_ID>" --once --json
+
+# 8. Background Inbox Listener (durably records envelopes to local JSONL inbox)
+python3 -m agent_link.cli receive --agent-id "<YOUR_AGENT_ID>" --watch --inbox ~/.agent-link/inbox.jsonl
+
+# 9. Offline Durable Inbox Decryption (decrypts local JSONL message log with local keypair)
+python3 -m agent_link.cli receive --agent-id "<YOUR_AGENT_ID>" --inbox ~/.agent-link/inbox.jsonl --decrypt --json
+
+# 10. Sever / Revoke Link
+python3 -m agent_link.cli revoke --agent-id "<YOUR_AGENT_ID>" --link-id "<LINK_ID>" --json
 ```
 
 ---
