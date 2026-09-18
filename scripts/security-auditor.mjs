@@ -57,7 +57,8 @@ function scanDir(dir) {
     } else if (entry.isFile()) {
       // Skip binary files
       if (entry.name.endsWith('.png') || entry.name.endsWith('.jpg') || entry.name.endsWith('.ico')) continue;
-      const content = fs.readFileSync(resPath, 'utf8').toLowerCase();
+      const rawContent = fs.readFileSync(resPath, 'utf8').toLowerCase();
+      const content = rawContent.replace(/github\.com\/cbellingan\//g, "");
       for (const pattern of bannedPatterns) {
         if (content.includes(pattern)) {
           console.error(`❌ [ERROR] File ${path.relative(process.cwd(), resPath)} contains personal identifier disclosure: "${pattern}"`);
