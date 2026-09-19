@@ -20,7 +20,9 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "audit:security": "node scripts/security-auditor.mjs",
-    "bug": "node scripts/get-bug.mjs"
+    "bug": "node scripts/get-bug.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "doctor": "node scripts/doctor.mjs"
   },
   "keywords": ["agent", "zero-knowledge", "security", "ed25519", "x25519", "qr", "mcp"],
   "author": "AgentLink Maintainers",

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -e
+
+echo "🚀 [Git Hook: pre-push] Verifying outgoing revisions before push..."
+
+# Read refs from stdin: <local ref> <local sha1> <remote ref> <remote sha1>
+IS_DELETE_ONLY=true
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_sha" != "0000000000000000000000000000000000000000" ]; then
+    IS_DELETE_ONLY=false
+    break
+  fi
+done
+
+if [ "$IS_DELETE_ONLY" = true ]; then
+  echo "ℹ️  [Git Hook: pre-push] Delete-only push detected; skipping test suite."
+  exit 0
+fi
+
+# Run test suite
+echo "🧪 Running full test suite..."
+if ! npm test; then
+  echo "❌ [Git Hook: pre-push] Tests failed! Push blocked."
+  echo "👉 Fix failing tests and re-run: npm test"
+  exit 1
+fi
+
+echo "✅ [Git Hook: pre-push] Verification passed. Proceeding with push."
+exit 0

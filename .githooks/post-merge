@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+# Advisory check for modified dependencies after merge
+if git rev-parse -q --verify ORIG_HEAD >/dev/null 2>&1; then
+  CHANGED=$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null || true)
+  if echo "$CHANGED" | grep -E "(package\.json|package-lock\.json)" >/dev/null 2>&1; then
+    echo "⚠️  [Git Hook: post-merge] Node dependencies were modified in this merge."
+    echo "👉 Consider running: npm install"
+  fi
+fi
+exit 0
