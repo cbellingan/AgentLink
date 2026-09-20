@@ -14,7 +14,7 @@ var AgentLinkServer = class {
   adminEmailHash;
   // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
   authorizedEmailHashes;
-  adminPassword = process.env.ADMIN_PASSWORD || "AdminSecure2026!";
+  adminPassword = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === "production" ? "" : "AdminSecure2026!");
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   humanSessions = /* @__PURE__ */ new Map();
   // token -> user
@@ -36,7 +36,7 @@ var AgentLinkServer = class {
   bugLogPath;
   bugRateLimits = /* @__PURE__ */ new Map();
   // key -> timestamps
-  supervisorSockets = /* @__PURE__ */ new Set();
+  supervisorSessions = /* @__PURE__ */ new Map();
   wsHeartbeatInterval = null;
   stateFilePath;
   lastKeySaveTime = 0;
@@ -531,13 +531,13 @@ Instructions for your Agent:
         clearInterval(this.wsHeartbeatInterval);
         this.wsHeartbeatInterval = null;
       }
-      for (const ws of this.supervisorSockets) {
+      for (const [ws] of this.supervisorSessions.entries()) {
         try {
           ws.close();
         } catch {
         }
       }
-      this.supervisorSockets.clear();
+      this.supervisorSessions.clear();
       this.wss?.close();
       if (this.server) {
         this.server.close(() => resolve());
@@ -719,15 +719,23 @@ Instructions for your Agent:
             email = verified.email;
             if (verified.name) name = verified.name;
           } else {
-            const testSecretHeader = req.headers["x-test-auth-secret"];
-            const configuredTestSecret = process.env.TEST_AUTH_SECRET || "test_sec_mesh_secret_2026";
-            const isTestAuthorized = Boolean(testSecretHeader && testSecretHeader === configuredTestSecret);
-            const isDevOrTest = process.env.NODE_ENV !== "production";
-            if (!isDevOrTest && !isTestAuthorized) {
+            if (process.env.NODE_ENV === "production") {
               setSecurityNote(`GOOGLE LOGIN BLOCKED: Plain email login rejected in production without verified Google ID token`);
               this.sendJson(res, 401, {
                 error: "credential_required",
                 message: "Real Google ID token credential required for Google Sign-In in production."
+              });
+              return;
+            }
+            const testSecretHeader = req.headers["x-test-auth-secret"];
+            const configuredTestSecret = process.env.TEST_AUTH_SECRET || (process.env.NODE_ENV === "test" ? "test_sec_mesh_secret_2026" : void 0);
+            const isTestAuthorized = Boolean(configuredTestSecret && testSecretHeader && testSecretHeader === configuredTestSecret);
+            const isDevOrTest = process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development";
+            if (!isDevOrTest && !isTestAuthorized) {
+              setSecurityNote(`GOOGLE LOGIN BLOCKED: Plain email login rejected without valid credentials`);
+              this.sendJson(res, 401, {
+                error: "credential_required",
+                message: "Google ID token or authorized test secret required."
               });
               return;
             }
@@ -788,7 +796,17 @@ Instructions for your Agent:
             });
             return;
           }
-          if (password !== this.adminPassword) {
+          if (process.env.NODE_ENV === "production") {
+            if (!this.adminPassword || this.adminPassword === "AdminSecure2026!" || password === "AdminSecure2026!") {
+              setSecurityNote(`LOGIN REJECTED: Predictable default password forbidden in production`);
+              this.sendJson(res, 401, {
+                error: "invalid_credentials",
+                message: "Production requires an explicit, non-default ADMIN_PASSWORD"
+              });
+              return;
+            }
+          }
+          if (!password || password !== this.adminPassword) {
             setSecurityNote(`INVALID PASSWORD for ${email || "admin"}`);
             this.sendJson(res, 401, { error: "invalid_credentials", message: "Invalid password" });
             return;
@@ -820,7 +838,21 @@ Instructions for your Agent:
       }
       if (req.method === "POST" && parsedUrl === "/api/auth/logout") {
         const token = this.extractToken(req);
-        if (token) this.humanSessions.delete(token);
+        if (token) {
+          this.humanSessions.delete(token);
+          for (const [ws, session] of this.supervisorSessions.entries()) {
+            if (session.token === token) {
+              try {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "session_terminated", reason: "logged_out", timestamp: (/* @__PURE__ */ new Date()).toISOString() }));
+                }
+                ws.close(4401, "Logged out");
+              } catch {
+              }
+              this.supervisorSessions.delete(ws);
+            }
+          }
+        }
         this.sendJson(res, 200, { status: "ok", loggedOut: true });
         return;
       }
@@ -1166,7 +1198,8 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           const apiKeyRecord = token ? this.resolveApiKey(token) : null;
           const humanSession = token ? this.humanSessions.get(token) : null;
           const isAdmin = Boolean(humanSession && humanSession.role === "admin");
-          if (!apiKeyRecord && !isAdmin && token !== "sec_apk_valid_12345") {
+          const isTestBypassKey = process.env.NODE_ENV === "test" && token === "sec_apk_valid_12345";
+          if (!apiKeyRecord && !isAdmin && !isTestBypassKey) {
             const tokenSnippet = token ? `${token.slice(0, 12)}...` : "none";
             setSecurityNote(`AGENT REGISTRATION REJECTED: Invalid or missing API key (${tokenSnippet})`);
             this.sendJson(res, 401, {
@@ -1684,15 +1717,18 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             return;
           }
           const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
-          if (!human && !apiKey) {
-            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to approve link" });
+          if (!human) {
+            this.sendJson(res, 401, { error: "human_session_required", message: "Human supervisor session required to approve link" });
             return;
           }
-          let approverId = isAdmin && (body.approverHumanId || body.humanId) ? body.approverHumanId || body.humanId : ownerHumanId || (human ? human.id : null);
+          let approverId = isAdmin && (body.approverHumanId || body.humanId) ? body.approverHumanId || body.humanId : human.id;
           if (approverId === "human_carl") approverId = "human_admin";
           if (!approverId) {
             this.sendJson(res, 401, { error: "unauthorized", message: "Valid approver identity required" });
             return;
+          }
+          if (isAdmin && (body.force || approverId !== link.initiatorHumanId && approverId !== link.responderHumanId)) {
+            setSecurityNote(`AUDIT: Admin ${human.email} (${human.id}) executed supervisor override on link ${linkId}`);
           }
           if (!isAdmin && approverId !== link.initiatorHumanId && approverId !== link.responderHumanId) {
             this.sendJson(res, 403, { error: "forbidden", message: "Caller is not authorized to approve this link" });
@@ -2192,9 +2228,28 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "register_supervisor") {
-          this.supervisorSockets.add(ws);
+          const token = typeof msg.token === "string" ? msg.token.trim() : null;
+          const user = token ? this.humanSessions.get(token) : null;
+          if (!user) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "error",
+                error: "unauthorized",
+                message: "Valid human session token required to subscribe to supervisor events",
+                timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              }));
+            }
+            ws.close(4401, "Unauthorized");
+            return;
+          }
+          this.supervisorSessions.set(ws, { ws, user, token });
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "registered", status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() }));
+            ws.send(JSON.stringify({
+              type: "registered",
+              status: "ok",
+              user: { id: user.id, name: user.name, role: user.role },
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            }));
           }
         } else if (msg.type === "ping") {
           if (ws.readyState === WebSocket.OPEN) {
@@ -2205,31 +2260,92 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       }
     });
     ws.on("close", () => {
-      this.supervisorSockets.delete(ws);
+      this.supervisorSessions.delete(ws);
     });
     ws.on("error", () => {
-      this.supervisorSockets.delete(ws);
+      this.supervisorSessions.delete(ws);
     });
+  }
+  sanitizeEventForBroadcast(event) {
+    if (!event || typeof event !== "object") return event;
+    const sanitized = JSON.parse(JSON.stringify(event));
+    const scrub = (obj) => {
+      if (!obj || typeof obj !== "object") return;
+      for (const k of Object.keys(obj)) {
+        const lower = k.toLowerCase();
+        if (lower === "key" || lower === "apikey" || lower === "token" || lower === "secret" || lower === "privatekey") {
+          delete obj[k];
+        } else if (typeof obj[k] === "object") {
+          scrub(obj[k]);
+        }
+      }
+    };
+    scrub(sanitized);
+    return sanitized;
+  }
+  isSupervisorAuthorizedForEvent(user, event) {
+    if (!user) return false;
+    if (user.role === "admin" || user.id === "human_admin" || user.id === "human_carl") {
+      return true;
+    }
+    const type = event?.type;
+    if (type === "ping" || type === "session_terminated") {
+      return true;
+    }
+    if (type === "agent_registered") {
+      const agent = event.agent;
+      return Boolean(agent && (agent.ownerHumanId === user.id || this.isAgentOwnedBy(agent.id, user.id)));
+    }
+    if (type === "agent_deregistered") {
+      const agentId = event.agentId;
+      return this.isAgentOwnedBy(agentId, user.id);
+    }
+    if (type === "link_requested" || type === "link_approved" || type === "link_revoked" || type === "message_sent") {
+      const linkId = event.linkId;
+      const link = linkId ? this.links.get(linkId) || event.link : event.link;
+      if (link) {
+        return this.isAgentOwnedBy(link.agentAId, user.id) || this.isAgentOwnedBy(link.agentBId, user.id);
+      }
+      return false;
+    }
+    if (type === "key_created" || type === "key_deleted") {
+      const keyId = event.keyId;
+      const keyRecord = keyId ? Array.from(this.apiKeys.values()).find((k) => k.id === keyId) : null;
+      return Boolean(keyRecord && keyRecord.ownerHumanId === user.id);
+    }
+    if (type === "invite_created" || type === "invite_deleted") {
+      const inviteId = event.inviteId;
+      const inv = inviteId ? this.invites.get(inviteId) : null;
+      return Boolean(inv && (inv.creatorHumanId === user.id || inv.recipientEmail === user.email));
+    }
+    if (type === "bug_reported" || type === "bug_resolved") {
+      const bug = event.bug;
+      return Boolean(bug && bug.reporterEmail === user.email);
+    }
+    return false;
   }
   notifySupervisors(event) {
     if (!event.timestamp) {
       event.timestamp = (/* @__PURE__ */ new Date()).toISOString();
     }
-    const raw = JSON.stringify(event);
+    const sanitized = this.sanitizeEventForBroadcast(event);
+    const raw = JSON.stringify(sanitized);
     const toDelete = [];
-    for (const ws of this.supervisorSockets) {
+    for (const [ws, session] of this.supervisorSessions.entries()) {
       if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(raw);
-        } catch {
-          toDelete.push(ws);
+        if (this.isSupervisorAuthorizedForEvent(session.user, event)) {
+          try {
+            ws.send(raw);
+          } catch {
+            toDelete.push(ws);
+          }
         }
       } else {
         toDelete.push(ws);
       }
     }
     for (const dead of toDelete) {
-      this.supervisorSockets.delete(dead);
+      this.supervisorSessions.delete(dead);
     }
   }
   extractToken(req) {
@@ -2271,7 +2387,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     const token = this.extractToken(req);
     const human = this.getAuthenticatedHuman(req);
     let apiKey = token ? this.resolveApiKey(token) : null;
-    if (!apiKey && token === "sec_apk_valid_12345") {
+    if (!apiKey && process.env.NODE_ENV === "test" && token === "sec_apk_valid_12345") {
       apiKey = {
         id: "test_key",
         key: token,

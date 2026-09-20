@@ -96,7 +96,7 @@ var worker_default = {
     if (request.method === "POST" && url.pathname === "/api/agents/register") {
       const auth = request.headers.get("Authorization") || "";
       const token = auth.replace(/^Bearer\s+/i, "").trim();
-      const validKey = memoryState.apiKeys.has(token) || token === "sec_apk_valid_12345";
+      const validKey = memoryState.apiKeys.has(token);
       if (!validKey) {
         return new Response(JSON.stringify({
           error: "invalid_api_key",
@@ -129,7 +129,7 @@ var worker_default = {
     if (request.method === "GET" && url.pathname === "/api/agents") {
       const auth = request.headers.get("Authorization") || "";
       const token = auth.replace(/^Bearer\s+/i, "").trim();
-      const validKey = memoryState.apiKeys.has(token) || memoryState.sessions.has(token) || token === "sec_apk_valid_12345";
+      const validKey = memoryState.apiKeys.has(token) || memoryState.sessions.has(token);
       if (!validKey) {
         return new Response(JSON.stringify({ error: "unauthorized", message: "Authentication required" }), {
           status: 401,

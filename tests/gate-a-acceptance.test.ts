@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import WebSocket from 'ws';
 import { AgentLinkServer } from '../server/agent-link-server.js';
 import { IsolatedTestEnvironment } from './harness/isolated-env.js';
 import { ProcessSupervisor } from './harness/process-supervisor.js';
@@ -603,5 +604,204 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
     // 3. Server must remain healthy and responsive
     const healthRes = await fetch(`${serverUrl}/health`);
     expect(healthRes.status).toBe(200);
+  });
+
+  it('E2E-012: Authenticated WebSocket supervisor subscriptions & private event isolation', async () => {
+    const wsUrl = `ws://127.0.0.1:${serverPort}/ws`;
+
+    // 1. Anonymous connection attempt without token receives 4401 unauthorized
+    const anonWs = new WebSocket(wsUrl);
+    let anonClosed = false;
+    let anonCloseCode = 0;
+    let anonError: any = null;
+
+    anonWs.on('message', (d) => { anonError = JSON.parse(d.toString()); });
+    anonWs.on('close', (code) => {
+      anonClosed = true;
+      anonCloseCode = code;
+    });
+
+    await new Promise<void>((resolve) => anonWs.on('open', () => {
+      anonWs.send(JSON.stringify({ type: 'register_supervisor' }));
+      resolve();
+    }));
+    await new Promise(r => setTimeout(r, 120));
+
+    expect(anonClosed).toBe(true);
+    expect(anonCloseCode).toBe(4401);
+    expect(anonError?.error).toBe('unauthorized');
+
+    // 2. Eve connection attempt with forged/invalid token is rejected with 4401
+    const eveWs = new WebSocket(wsUrl);
+    let eveClosed = false;
+    let eveCloseCode = 0;
+    let eveError: any = null;
+
+    eveWs.on('message', (d) => { eveError = JSON.parse(d.toString()); });
+    eveWs.on('close', (code) => {
+      eveClosed = true;
+      eveCloseCode = code;
+    });
+
+    await new Promise<void>((resolve) => eveWs.on('open', () => {
+      eveWs.send(JSON.stringify({ type: 'register_supervisor', token: 'sec_hum_forged_eve_token' }));
+      resolve();
+    }));
+    await new Promise(r => setTimeout(r, 120));
+
+    expect(eveClosed).toBe(true);
+    expect(eveCloseCode).toBe(4401);
+    expect(eveError?.error).toBe('unauthorized');
+
+    // 3. Connect valid subscriptions for H1 (Admin) and H2 (Collaborator)
+    const h1Ws = new WebSocket(wsUrl);
+    const h2Ws = new WebSocket(wsUrl);
+
+    const h1Messages: any[] = [];
+    const h2Messages: any[] = [];
+
+    h1Ws.on('message', (d) => h1Messages.push(JSON.parse(d.toString())));
+    h2Ws.on('message', (d) => h2Messages.push(JSON.parse(d.toString())));
+
+    await Promise.all([
+      new Promise<void>((res) => h1Ws.on('open', () => {
+        h1Ws.send(JSON.stringify({ type: 'register_supervisor', token: h1Token }));
+        res();
+      })),
+      new Promise<void>((res) => h2Ws.on('open', () => {
+        h2Ws.send(JSON.stringify({ type: 'register_supervisor', token: h2Token }));
+        res();
+      })),
+    ]);
+    await new Promise(r => setTimeout(r, 100));
+
+    expect(h1Messages.some(m => m.type === 'registered')).toBe(true);
+    expect(h2Messages.some(m => m.type === 'registered')).toBe(true);
+
+    // 4. Create a private key belonging to H2; emit notification containing secret key material
+    // Verify:
+    // a) H2 receives notification because H2 owns the key
+    // b) H1 receives notification because H1 is admin
+    // c) Sensitive key material is scrubbed from the broadcast
+    const h2KeyRes = await fetch(`${serverUrl}/api/keys/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h2Token}`,
+      },
+      body: JSON.stringify({ label: 'H2 Isolated Private Key' }),
+    });
+    expect([200, 201]).toContain(h2KeyRes.status);
+    const h2KeyData = await h2KeyRes.json();
+    const createdKeyId = h2KeyData.apiKey?.id || h2KeyData.id;
+
+    await new Promise(r => setTimeout(r, 120));
+
+    // Both H1 (admin) and H2 (owner) should receive key_created event
+    const h2Event = h2Messages.find(m => m.type === 'key_created' && m.keyId === createdKeyId);
+    expect(h2Event).toBeDefined();
+    // Verify no secret key material is leaked in the broadcast payload
+    expect(h2Event?.key).toBeUndefined();
+    expect(h2Event?.apiKey).toBeUndefined();
+
+    // 5. Logout H2 and verify H2's WebSocket subscription is closed with 4401 session_terminated
+    let h2WsClosed = false;
+    let h2WsCloseCode = 0;
+    h2Ws.on('close', (code) => {
+      h2WsClosed = true;
+      h2WsCloseCode = code;
+    });
+
+    const logoutRes = await fetch(`${serverUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${h2Token}` },
+    });
+    expect(logoutRes.status).toBe(200);
+
+    await new Promise(r => setTimeout(r, 120));
+    expect(h2WsClosed).toBe(true);
+    expect(h2WsCloseCode).toBe(4401);
+    expect(h2Messages.some(m => m.type === 'session_terminated')).toBe(true);
+
+    // Re-login H2 so subsequent test cases maintain clean fixture state
+    const reLogin = await fetch(`${serverUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: TEST_H2_EMAIL, name: 'Human 2' }),
+    });
+    const reData = await reLogin.json();
+    h2Token = reData.token;
+
+    h1Ws.close();
+  });
+
+  it('E2E-024: Production-mode rejection of legacy test credentials, default passwords, and bypass headers', async () => {
+    // 1. Launch a separate server instance in strict production mode
+    const prodEnv = new IsolatedTestEnvironment('agentlink-gate-a-prod-');
+    const prevEnv = process.env.NODE_ENV;
+    const prevAdminPwd = process.env.ADMIN_PASSWORD;
+    const prevAdminEmailHash = process.env.ADMIN_EMAIL_HASH;
+
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.ADMIN_PASSWORD; // Unset to verify default password rejection
+      process.env.ADMIN_EMAIL_HASH = crypto.createHash('sha256').update('admin@signetmesh.internal').digest('hex');
+      process.env.DATA_PATH = prodEnv.paths.serverData;
+      process.env.BUG_LOG_PATH = prodEnv.paths.serverBugLog;
+
+      const prodServer = new AgentLinkServer(0);
+      const prodPort = await prodServer.listen();
+      const prodUrl = `http://127.0.0.1:${prodPort}`;
+
+      // 2. Default predictable password 'AdminSecure2026!' is rejected
+      const pwdLogin = await fetch(`${prodUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@signetmesh.internal', password: 'AdminSecure2026!' }),
+      });
+      expect(pwdLogin.status).toBe(401);
+      const pwdBody = await pwdLogin.json();
+      expect(pwdBody.error).toBe('invalid_credentials');
+
+      // 3. Test-header email login bypass 'x-test-auth-secret' is rejected in production
+      const headerLogin = await fetch(`${prodUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-test-auth-secret': 'test_sec_mesh_secret_2026',
+        },
+        body: JSON.stringify({ email: 'admin@signetmesh.internal' }),
+      });
+      expect(headerLogin.status).toBe(401);
+      const headerBody = await headerLogin.json();
+      expect(headerBody.error).toBe('credential_required');
+
+      // 4. Legacy test API key 'sec_apk_valid_12345' is rejected in production
+      const regRes = await fetch(`${prodUrl}/api/agents/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer sec_apk_valid_12345',
+        },
+        body: JSON.stringify({ id: 'agent-prod-intruder' }),
+      });
+      expect(regRes.status).toBe(401);
+      const regBody = await regRes.json();
+      expect(regBody.error).toBe('invalid_api_key');
+
+      // 5. Querying agents with legacy test key is rejected
+      const listRes = await fetch(`${prodUrl}/api/agents`, {
+        headers: { 'Authorization': 'Bearer sec_apk_valid_12345' },
+      });
+      expect(listRes.status).toBe(401);
+
+      await prodServer.close();
+      prodEnv.cleanup();
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+      if (prevAdminPwd) process.env.ADMIN_PASSWORD = prevAdminPwd;
+      if (prevAdminEmailHash) process.env.ADMIN_EMAIL_HASH = prevAdminEmailHash;
+      else delete process.env.ADMIN_EMAIL_HASH;
+    }
   });
 });

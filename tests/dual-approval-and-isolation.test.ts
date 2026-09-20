@@ -565,7 +565,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
       expect(prodRes.status).toBe(401);
       expect(prodRes.data.error).toBe('credential_required');
 
-      // Test secret bypass allows authorized test runner even in production
+      // Milestone 4: Test secret bypass header is strictly forbidden and rejected in production
       const testBypassRes = await fetch(`${baseUrl}/api/auth/google`, {
         method: 'POST',
         headers: {
@@ -574,7 +574,9 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
         },
         body: JSON.stringify({ email: TEST_ADMIN_EMAIL }),
       });
-      expect(testBypassRes.status).toBe(200);
+      expect(testBypassRes.status).toBe(401);
+      const testBypassBody = await testBypassRes.json();
+      expect(testBypassBody.error).toBe('credential_required');
     } finally {
       process.env.NODE_ENV = prevEnv;
     }

@@ -379,9 +379,9 @@ describe('Real-Time WebSocket Event Bus Test Suite', () => {
     ws2.on('message', (d) => received2.push(JSON.parse(d.toString())));
 
     await Promise.all([
-      new Promise<void>((res) => ws1.on('open', () => { ws1.send(JSON.stringify({ type: 'register_supervisor' })); res(); })),
-      new Promise<void>((res) => ws2.on('open', () => { ws2.send(JSON.stringify({ type: 'register_supervisor' })); res(); })),
-      new Promise<void>((res) => wsDead.on('open', () => { wsDead.send(JSON.stringify({ type: 'register_supervisor' })); res(); })),
+      new Promise<void>((res) => ws1.on('open', () => { ws1.send(JSON.stringify({ type: 'register_supervisor', token: adminToken })); res(); })),
+      new Promise<void>((res) => ws2.on('open', () => { ws2.send(JSON.stringify({ type: 'register_supervisor', token: adminToken })); res(); })),
+      new Promise<void>((res) => wsDead.on('open', () => { wsDead.send(JSON.stringify({ type: 'register_supervisor', token: adminToken })); res(); })),
     ]);
 
     // Forcefully destroy wsDead abruptly without standard handshake
