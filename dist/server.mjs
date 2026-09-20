@@ -15,6 +15,7 @@ var AgentLinkServer = class {
   // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
   authorizedEmailHashes;
   adminPassword = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === "production" ? "" : "AdminSecure2026!");
+  bindHost;
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   humanSessions = /* @__PURE__ */ new Map();
   // token -> user
@@ -73,7 +74,9 @@ var AgentLinkServer = class {
     }
     this.loadState();
     this.loadBugReports();
-    this.discoverLocalAgents();
+    if (process.env.AGENTLINK_MIGRATE_LEGACY === "true") {
+      this.discoverLocalAgents();
+    }
   }
   loadBugReports() {
     try {
@@ -297,16 +300,16 @@ Instructions for your Agent:
 1. Review technical & security specification:
    ${onboardingUrl}
 2. Initialize local cryptographic identity and connect:
-   python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --once
+   python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --server "${portal}" --once
 3. Check approved link status with '${opts.peerAgentId}':
-   python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
+   python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --server "${portal}" --json
 4. Send an end-to-end encrypted message once link is approved:
-   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
+   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --server "${portal}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
 5. Receive messages / listen for replies:
    # Single-shot check:
-   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --once --json
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --server "${portal}" --once --json
    # Or continuous inbox listener daemon:
-   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --watch --inbox ~/.agent-link/inbox.jsonl`;
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --server "${portal}" --watch --inbox ~/.agent-link/inbox.jsonl`;
   }
   discoverLocalAgents() {
     if (process.env.NODE_ENV === "test") {
@@ -494,7 +497,9 @@ Instructions for your Agent:
     }
     this.saveState();
   }
-  async listen() {
+  async listen(host) {
+    const bindHost2 = host || process.env.BIND_HOST || process.env.HOST || (process.env.NODE_ENV === "production" ? "127.0.0.1" : void 0);
+    this.bindHost = bindHost2;
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handleHttpRequest(req, res));
       this.server.keepAliveTimeout = 12e4;
@@ -510,18 +515,24 @@ Instructions for your Agent:
           socket.destroy();
         }
       });
-      this.server.listen(this.port, () => {
+      const onListening = () => {
         const addr = this.server?.address();
         const actualPort = typeof addr === "object" && addr ? addr.port : this.port;
         this.port = actualPort;
-        console.log(`[AgentLink Server] Listening on http://localhost:${actualPort}`);
+        const hostDesc = bindHost2 || "0.0.0.0";
+        console.log(`[AgentLink Server] Listening on http://${hostDesc}:${actualPort}`);
         if (process.env.NODE_ENV !== "test") {
           this.wsHeartbeatInterval = setInterval(() => {
             this.notifySupervisors({ type: "ping" });
           }, 25e3);
         }
         resolve(actualPort);
-      });
+      };
+      if (bindHost2) {
+        this.server.listen(this.port, bindHost2, onListening);
+      } else {
+        this.server.listen(this.port, onListening);
+      }
       this.server.on("error", reject);
     });
   }
@@ -667,10 +678,13 @@ Instructions for your Agent:
         this.sendJson(res, 200, {
           name: `${this.brandName} Zero-Knowledge Relay`,
           version: "1.0.0",
+          releaseId: process.env.RELEASE_ID || process.env.BUILD_COMMIT || "1.0.0",
+          commitHash: process.env.BUILD_COMMIT || void 0,
           adminConfigured: true,
           port: this.port,
           portalUrl: this.portalUrl,
-          brandName: this.brandName
+          brandName: this.brandName,
+          bindHost: this.bindHost || void 0
         });
         return;
       }
@@ -691,6 +705,98 @@ Instructions for your Agent:
           this.sendJson(res, 200, { status: "ok", content: text });
           return;
         }
+      }
+      if (req.method === "GET" && (parsedUrl === "/api/schemas" || parsedUrl === "/api/v1/schemas")) {
+        this.sendJson(res, 200, {
+          version: "1.0.0",
+          title: `${this.brandName} API Schema Registry`,
+          description: "Versioned request/response schemas and standardized error codes for AgentLink zero-knowledge relay",
+          errorCodes: {
+            unauthorized: {
+              httpStatus: 401,
+              description: "Authentication required (missing or invalid credentials)"
+            },
+            forbidden: {
+              httpStatus: 403,
+              description: "Caller is not authorized to perform the operation on the requested resource"
+            },
+            forbidden_participant: {
+              httpStatus: 403,
+              description: "Agent is not an authorized participant of the specified link"
+            },
+            link_not_approved: {
+              httpStatus: 403,
+              description: "Link has not been approved by all required human controllers"
+            },
+            link_not_found: {
+              httpStatus: 404,
+              description: "Specified link ID does not exist"
+            },
+            agent_not_found: {
+              httpStatus: 404,
+              description: "Specified agent ID is not registered"
+            },
+            bad_request: {
+              httpStatus: 400,
+              description: "Request payload failed validation or required fields were missing"
+            },
+            method_not_allowed: {
+              httpStatus: 405,
+              description: "HTTP method not supported for endpoint"
+            }
+          },
+          schemas: {
+            ErrorResponse: {
+              type: "object",
+              required: ["error", "message"],
+              properties: {
+                error: { type: "string" },
+                message: { type: "string" }
+              }
+            },
+            ServerInfoResponse: {
+              type: "object",
+              required: ["name", "version", "portalUrl", "brandName"],
+              properties: {
+                name: { type: "string" },
+                version: { type: "string" },
+                adminConfigured: { type: "boolean" },
+                port: { type: "number" },
+                portalUrl: { type: "string" },
+                brandName: { type: "string" }
+              }
+            },
+            AgentRegistrationRequest: {
+              type: "object",
+              required: ["id", "signPub", "encPub"],
+              properties: {
+                id: { type: "string", pattern: "^[a-zA-Z0-9_-]{2,64}$" },
+                signPub: { type: "string" },
+                encPub: { type: "string" },
+                kid: { type: "string" }
+              }
+            },
+            LinkRequestPayload: {
+              type: "object",
+              required: ["myAgentId", "peerAgentId"],
+              properties: {
+                myAgentId: { type: "string" },
+                peerAgentId: { type: "string" },
+                note: { type: "string" }
+              }
+            },
+            LinkMessagePayload: {
+              type: "object",
+              required: ["senderId", "payload"],
+              properties: {
+                senderId: { type: "string" },
+                senderType: { type: "string", enum: ["agent", "operator"] },
+                payload: { type: ["string", "object"] }
+              }
+            }
+          }
+        });
+        return;
       }
       if (req.method === "GET" && parsedUrl === "/api/auth/config") {
         this.sendJson(res, 200, {
@@ -1522,7 +1628,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to initiate link requests" });
             return;
           }
-          const agentAId = body.agentAId || body.fromAgentId;
+          const agentAId = body.agentAId || body.fromAgentId || body.myAgentId;
           const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
           if (!agentAId || !agentBId) {
             this.sendJson(res, 400, { error: "invalid_agents", message: "Both agentAId and agentBId are required" });
@@ -1890,6 +1996,8 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                 link.maxPayloadBytes = payloadBytes;
               }
               link.lastActivityAt = (/* @__PURE__ */ new Date()).toISOString();
+              const isOperator2 = Boolean(human && !apiKey) || body.senderType === "operator";
+              const operatorEmail2 = isOperator2 ? human?.email || "operator" : void 0;
               if (!link.recentMessages) link.recentMessages = [];
               const previewText = typeof body.payload === "string" ? body.payload : isEnc ? `[E2EE v${body.payload.v || 1}${seq ? ` #${seq}` : ""} ${body.payload.data.slice(0, 12)}...]` : "[E2EE Encrypted Payload]";
               link.recentMessages.push({
@@ -1901,21 +2009,27 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                 isEncrypted: isEnc,
                 isSigned,
                 seq,
-                payload: body.payload
+                payload: body.payload,
+                senderType: isOperator2 ? "operator" : "agent",
+                operatorEmail: operatorEmail2
               });
               if (link.recentMessages.length > 100) link.recentMessages.shift();
               this.saveState();
               this.notifySupervisors({ type: "message_sent", linkId, senderId, targetId, seq });
             }
+            const isOperator = Boolean(human && !apiKey) || body.senderType === "operator";
+            const operatorEmail = isOperator ? human?.email || "operator" : void 0;
             const senderAgent = this.agents.get(senderId);
             const q = this.messageQueues.get(targetId) || [];
             this.messageQueues.set(targetId, q);
             q.push({
               linkId,
               senderId,
-              senderEncPub: senderAgent?.encPub,
-              senderSignPub: senderAgent?.signPub,
-              senderKid: senderAgent?.kid,
+              senderType: isOperator ? "operator" : "agent",
+              operatorEmail,
+              senderEncPub: isOperator ? void 0 : senderAgent?.encPub,
+              senderSignPub: isOperator ? void 0 : senderAgent?.signPub,
+              senderKid: isOperator ? void 0 : senderAgent?.kid,
               payload: body.payload,
               timestamp: (/* @__PURE__ */ new Date()).toISOString()
             });
@@ -2417,7 +2531,8 @@ var defaultPort = process.env.NODE_ENV === "development" || process.env.NODE_ENV
 var port = parseInt(process.env.PORT || String(defaultPort), 10);
 var staticPath = process.env.STATIC_PATH || path2.resolve("web");
 var server = new AgentLinkServer(port, staticPath);
-server.listen().catch((err) => {
+var bindHost = process.env.BIND_HOST || void 0;
+server.listen(bindHost).catch((err) => {
   console.error("Fatal server startup error:", err);
   process.exit(1);
 });

@@ -5,8 +5,21 @@
  * or falls back to an ad-hoc quick tunnel.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+
+// Feature 7.1: SignetMesh is the authoritative production deployment and tunnel manager
+const siblingSignetMesh = path.resolve(process.cwd(), '..', 'SignetMesh');
+if (fs.existsSync(siblingSignetMesh) && !process.env.AGENTLINK_STANDALONE) {
+  console.log('📌 Notice: SignetMesh is the authoritative production deployment and tunnel manager.');
+  console.log(`   Delegating to: node ${path.join(siblingSignetMesh, 'scripts', 'start-production.mjs')}\n`);
+  const res = spawnSync('node', [path.join(siblingSignetMesh, 'scripts', 'start-production.mjs'), ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    cwd: siblingSignetMesh,
+  });
+  process.exit(res.status ?? 0);
+}
 
 // Load .env if present
 try {

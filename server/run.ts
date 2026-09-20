@@ -9,7 +9,8 @@ const port = parseInt(process.env.PORT || String(defaultPort), 10);
 const staticPath = process.env.STATIC_PATH || path.resolve('web');
 const server = new AgentLinkServer(port, staticPath);
 
-server.listen().catch((err) => {
+const bindHost = process.env.BIND_HOST || undefined;
+server.listen(bindHost).catch((err) => {
   console.error('Fatal server startup error:', err);
   process.exit(1);
 });

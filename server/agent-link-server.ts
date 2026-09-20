@@ -21,6 +21,7 @@ export class AgentLinkServer {
   // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
   public readonly authorizedEmailHashes: Set<string>;
   public adminPassword: string = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === 'production' ? '' : 'AdminSecure2026!');
+  public bindHost?: string;
 
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   public humanSessions: Map<string, HumanUser> = new Map(); // token -> user
@@ -79,7 +80,10 @@ export class AgentLinkServer {
 
     this.loadState();
     this.loadBugReports();
-    this.discoverLocalAgents();
+    // Feature 7.5: Do not auto-seed host agents or auto-approve business links on clean startup
+    if (process.env.AGENTLINK_MIGRATE_LEGACY === 'true') {
+      this.discoverLocalAgents();
+    }
   }
 
   private loadBugReports(): void {
@@ -554,7 +558,9 @@ Instructions for your Agent:
     this.saveState();
   }
 
-  public async listen(): Promise<number> {
+  public async listen(host?: string): Promise<number> {
+    const bindHost = host || process.env.BIND_HOST || process.env.HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : undefined);
+    this.bindHost = bindHost;
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handleHttpRequest(req, res));
       // Reverse proxy keepalive alignment: cloudflared has 90s idle connection timeout.
@@ -575,18 +581,25 @@ Instructions for your Agent:
         }
       });
 
-      this.server.listen(this.port, () => {
+      const onListening = () => {
         const addr = this.server?.address();
         const actualPort = typeof addr === 'object' && addr ? addr.port : this.port;
         this.port = actualPort;
-        console.log(`[AgentLink Server] Listening on http://localhost:${actualPort}`);
+        const hostDesc = bindHost || '0.0.0.0';
+        console.log(`[AgentLink Server] Listening on http://${hostDesc}:${actualPort}`);
         if (process.env.NODE_ENV !== 'test') {
           this.wsHeartbeatInterval = setInterval(() => {
             this.notifySupervisors({ type: 'ping' });
           }, 25000);
         }
         resolve(actualPort);
-      });
+      };
+
+      if (bindHost) {
+        this.server.listen(this.port, bindHost, onListening);
+      } else {
+        this.server.listen(this.port, onListening);
+      }
 
       this.server.on('error', reject);
     });
@@ -750,10 +763,13 @@ Instructions for your Agent:
       this.sendJson(res, 200, {
         name: `${this.brandName} Zero-Knowledge Relay`,
         version: '1.0.0',
+        releaseId: process.env.RELEASE_ID || process.env.BUILD_COMMIT || '1.0.0',
+        commitHash: process.env.BUILD_COMMIT || undefined,
         adminConfigured: true,
         port: this.port,
         portalUrl: this.portalUrl,
         brandName: this.brandName,
+        bindHost: this.bindHost || undefined,
       });
       return;
     }

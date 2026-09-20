@@ -12,11 +12,24 @@
  * - Inspects Google Identity Services (GSI) / Auth gate configuration
  */
 
-import { execSync, spawn } from 'node:child_process';
+import { execSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT_DIR = process.cwd();
+
+// Feature 7.1: SignetMesh is the authoritative production deployment layer
+const siblingSignetMesh = path.resolve(ROOT_DIR, '..', 'SignetMesh');
+if (fs.existsSync(siblingSignetMesh) && !process.env.AGENTLINK_STANDALONE) {
+  console.log('📌 Notice: SignetMesh is the authoritative production deployment layer for this mesh.');
+  console.log(`   Delegating to: node ${path.join(siblingSignetMesh, 'scripts', 'start-production.mjs')}\n`);
+  const res = spawnSync('node', [path.join(siblingSignetMesh, 'scripts', 'start-production.mjs'), ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    cwd: siblingSignetMesh,
+  });
+  process.exit(res.status ?? 0);
+}
+
 const DATA_DIR = path.join(ROOT_DIR, '.data');
 const PID_FILE = path.join(DATA_DIR, 'agentlink.pid');
 const LOG_FILE = path.join(DATA_DIR, 'agentlink.log');

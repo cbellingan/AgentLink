@@ -1295,5 +1295,50 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
     expect(resolvedData.status).toBe('ok');
     expect(resolvedData.targetPeer).toBe('agent-bob');
   });
+
+  it('E2E-031: Clean AgentLink instance creates no business-specific agents or automatically approved links (Feature 7.5)', async () => {
+    // Instantiate a pristine server in an isolated environment without migration flags
+    const cleanDir = path.join(env.paths.root, 'clean-instance-data');
+    fs.mkdirSync(cleanDir, { recursive: true });
+
+    const origDataPath = process.env.DATA_PATH;
+    process.env.DATA_PATH = path.join(cleanDir, 'clean-state.json');
+
+    try {
+      const cleanServer = new AgentLinkServer(0);
+      // Clean instance must be pristine
+      expect(cleanServer.agents.size).toBe(0);
+      expect(cleanServer.apiKeys.size).toBe(0);
+
+      // Business-specific and host-local agents must not be seeded
+      expect(cleanServer.agents.has('antigravity')).toBe(false);
+      expect(cleanServer.agents.has('ted')).toBe(false);
+      expect(cleanServer.agents.has('puck')).toBe(false);
+
+      // No hardcoded default fleet key
+      expect(cleanServer.apiKeys.has('sec_apk_admin_fleet_primary')).toBe(false);
+    } finally {
+      process.env.DATA_PATH = origDataPath;
+    }
+  });
+
+  it('E2E-032: Bind address configuration restricts server to loopback behind local tunnel (Feature 7.3)', async () => {
+    const loopbackServer = new AgentLinkServer(0);
+    const actualPort = await loopbackServer.listen('127.0.0.1');
+
+    try {
+      expect(loopbackServer.bindHost).toBe('127.0.0.1');
+
+      // Verify server-info reflects loopback bindHost and releaseId
+      const res = await fetch(`http://127.0.0.1:${actualPort}/api/server-info`);
+      expect(res.status).toBe(200);
+      const info = await res.json();
+      expect(info.bindHost).toBe('127.0.0.1');
+      expect(info.releaseId).toBeDefined();
+    } finally {
+      await loopbackServer.close();
+    }
+  });
 });
+
 
