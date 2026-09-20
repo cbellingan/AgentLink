@@ -1,48 +1,34 @@
-# AgentLink Protocol & Security Specification (v2.1)
+# AgentLink Security Policy & Threat Model
 
-This document provides the formal architectural and cryptographic specification for **AgentLink**: a zero-knowledge autonomous agent mesh with out-of-band human trust anchors.
-
----
-
-## 1. Architectural Model & Trust Perimeter
-
-AgentLink separates transport routing from application-layer cryptographic trust:
-
-- **Local Key Isolation**: Private keys remain in `~/.agent-link/keys.json` with 0600 permissions.
-- **Client to Edge**: TLS 1.3 via Cloudflare Edge.
-- **Edge to Host**: Cloudflare Zero Trust Named Tunnel (QUIC / HTTP/3 UDP, Post-Quantum hybrid X25519MLKEM768).
-- **Application Layer (E2EE v2)**: X25519 ECDH, AES-256-GCM, per-link AAD binding, Ed25519 digital signatures.
+This document describes the security policies, vulnerability reporting procedure, and formal threat model for **AgentLink**.
 
 ---
 
-## 2. Content-Blind vs. Metadata-Blind Policy
+## 1. Reporting Security Vulnerabilities
 
-- **Content-Blind**: The relay server possesses zero decryption capabilities. All message bodies are end-to-end encrypted directly between client agent runtimes.
-- **Metadata Observed by Relay**: Only routing headers necessary to buffer frames: (linkId, senderId, seq, timestamp, ciphertextLength).
-- **Retention & Disposal**: In-flight frames are held ephemerally in memory until polled, then purged immediately. If a link is revoked, all pending in-flight frames are immediately destroyed.
+We take security vulnerabilities seriously. If you discover a security issue or vulnerability in AgentLink or its companion clients, please report it privately:
 
----
-
-## 3. Cryptographic Envelope Protocol (E2EE v2)
-
-1. **Key Agreement**: Diffie-Hellman over Curve25519 (X25519).
-2. **Key Derivation**: HKDF-SHA256 with linkId as salt.
-3. **Payload Encryption**: AES-256-GCM with fresh 12-byte random IV per frame and senderId:linkId:seq:timestamp AAD.
-4. **Digital Signature**: Ed25519 signature over (IV || Ciphertext || AAD).
-5. **Monotonic Replay Defense**: Recipient verifies timestamp (+/- 60s) and monotonic seq counter.
+- **Security Contact**: Contact the repository maintainers directly or email `security@signetmesh.com`.
+- **Disclosure Policy**: Please allow maintainers a reasonable window to remediate the vulnerability before public disclosure.
+- **Scope**: Core relay server (`server/`), client CLI (`agent-link-cli`), and production deployment layer (`SignetMesh`).
 
 ---
 
-## 4. Enrollment & Out-of-Band Human Trust Ceremony
+## 2. Formal Threat Model & Guarantees
 
-- **Secret-Free Notifications**: Email notices contain no bearer tokens or passwords. Operators log in directly via Google OAuth / Passkeys.
-- **Deterministic Mutual Safety Numbers**: 6-digit mutual number computed from sorted Key IDs:
-  SafetyNumber = (UInt32BE(SHA-256(sort(kid_A, kid_B))) % 900000) + 100000
-- **Fingerprint-Bound Dual Approvals**: A link remains pending_approval until both human operators approve the connection, binding approval to the exact key fingerprints.
-- **Human-to-Agent Connection Prompts**: Operators receive copy-pasteable instructions for their agents containing peer identity, Safety Number, and verification steps.
+For the formal protocol definitions and normative test vectors, see [`SPECIFICATION.md`](SPECIFICATION.md).
 
----
+### 2.1 Content-Blind Relay vs. Metadata Visibility
+- **Content-Blindness**: The relay is treated as an untrusted courier. All agent-to-agent message payloads are end-to-end encrypted using client-side X25519 ECDH and AES-256-GCM. The relay has zero decryption capabilities.
+- **Routing Metadata**: To route and buffer messages, the relay observes transport envelope headers (`linkId`, `senderId`, `recipientId`, `seq`, `timestamp`, `nonce`, `iv`, ciphertext length, and digital signature).
+- **Ephemeral Buffering**: The relay buffers frames ephemerally in memory until polled by the recipient or until the link is revoked.
 
-## 5. Unilateral Revocation
+### 2.2 Boundary Authentication & Default-Deny
+- **No Anonymous Authority**: All mutating operations (requesting links, sending messages, polling queues, approving relationships) require authenticated principals.
+- **Dual-Operator Human Trust Anchor**: Establishing a peer link requires explicit approval from human operators representing both endpoints. Sibling agents under the same operator require one approval.
+- **Session-Bound Approvals**: Approvals require a participating human operator session (`human_session_required`); agent API keys cannot approve links.
+- **Zero Built-In Credentials**: Production builds reject all legacy test credentials and header bypasses fail-closed.
 
-- Either human operator can unilaterally sever an active or pending link at any time. Revocation immediately invalidates the channel key and purges in-flight frame queues.
+### 2.3 Identity Pinning & Replay Resistance
+- **Two-Phase Replay Protection**: Inbound messages undergo non-mutating freshness checks before cryptographic verification; sequence numbers are committed only after signature and decryption succeed.
+- **Peer Key Pinning**: Peer public keys are pinned upon initial verified contact (`PeerKeyStore`). Attempts by the relay or network to substitute keys are rejected fail-closed.

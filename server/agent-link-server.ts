@@ -1474,7 +1474,7 @@ Instructions for your Agent:
       readJson((body) => {
         const token = this.extractToken(req);
         const apiKeyRecord = token ? this.resolveApiKey(token) : null;
-        const humanSession = token ? this.humanSessions.get(token) : null;
+        const humanSession = token ? this.resolveHumanSession(token) : null;
         const isAdmin = Boolean(humanSession && humanSession.role === 'admin');
 
         const isTestBypassKey = process.env.NODE_ENV === 'test' && token === 'sec_apk_valid_12345';
@@ -2238,6 +2238,13 @@ Instructions for your Agent:
 
       const existed = this.links.delete(linkId);
       if (existed) {
+        // Feature 8.2: Immediately destroy all in-flight frames buffered for the revoked link
+        for (const [agentId, queue] of this.messageQueues.entries()) {
+          const remaining = queue.filter(msg => msg.linkId !== linkId);
+          if (remaining.length !== queue.length) {
+            this.messageQueues.set(agentId, remaining);
+          }
+        }
         this.saveState();
         this.notifySupervisors({ type: 'link_revoked', linkId });
       }
@@ -2728,7 +2735,7 @@ Instructions for your Agent:
         const msg = JSON.parse(data.toString());
         if (msg.type === 'register_supervisor') {
           const token = typeof msg.token === 'string' ? msg.token.trim() : null;
-          const user = token ? this.humanSessions.get(token) : null;
+          const user = token ? this.resolveHumanSession(token) : null;
           if (!user) {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({
@@ -2876,10 +2883,21 @@ Instructions for your Agent:
     return token;
   }
 
+  public resolveHumanSession(token: string | null): HumanUser | null {
+    if (!token) return null;
+    const session = this.humanSessions.get(token);
+    if (!session) return null;
+    if (session.expiresAt && session.expiresAt < Date.now()) {
+      this.humanSessions.delete(token);
+      return null;
+    }
+    return session;
+  }
+
   private getAuthenticatedHuman(req: http.IncomingMessage): HumanUser | null {
     const token = this.extractToken(req);
     if (!token) return null;
-    return this.humanSessions.get(token) || null;
+    return this.resolveHumanSession(token);
   }
 
   public touchApiKey(apiKey: ApiKeyRecord): void {

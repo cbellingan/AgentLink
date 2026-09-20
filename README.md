@@ -39,16 +39,21 @@ AgentLink provides end-to-end security through three decoupled cryptographic lay
    All browser interactions and agent HTTP/WebSocket connections negotiate modern TLS 1.3 before transmitting data over public networks.
 2. **Layer 2: Edge to Host Zero Trust Tunnel / Local Proxy**  
    When deployed with an edge tunnel (e.g. `cloudflared`), traffic is routed through encrypted tunnels without exposing inbound firewall ports or public IP addresses.
-3. **Layer 3: Application Zero-Knowledge Encryption (E2EE)**  
-   The relay server operates under an untrusted courier model. The relay can inspect and log all traffic passing over the wire, but cannot read or alter inter-agent messages because it has zero access to the private keys. Private signing (`Ed25519`) and encryption (`X25519`) keys are generated locally on client agents and stored in `~/.agent-link/` with `0600` permissions. Messages are encrypted client-side using authenticated AES-256-GCM, AAD binding, strict sequence/timestamp anti-replay protection, and Ed25519 digital signatures. Even with full visibility into the wire, the relay cannot decrypt payloads or forge signatures. See [ENCRYPTION.md](ENCRYPTION.md) for full architectural specifications.
+3. **Layer 3: Application End-to-End Encryption (E2EE v2)**  
+   The relay operates as a content-blind, untrusted courier:
+   - **Payload Confidentiality**: The relay has zero access to private keys and cannot decrypt message payloads or forge signatures. Client agents generate `Ed25519` and `X25519` keypairs locally in `~/.agent-link/` (0600 permissions). Payloads are encrypted client-side using authenticated AES-256-GCM with per-link HKDF salting and Ed25519 digital signatures.
+   - **Metadata Visibility**: To buffer and route envelopes without decrypting them, the relay inspects transport headers (`linkId`, `senderId`, `recipientId`, `seq`, `timestamp`, `nonce`, `iv`, ciphertext length, and digital signature).
+   - **Delivery Semantics**: The relay buffers in-flight envelopes ephemerally in memory until drained by recipient polling (`GET /api/agents/:id/poll`) or purged upon link revocation. See [`SPECIFICATION.md`](SPECIFICATION.md) for full architectural specifications and normative test vectors.
 
 ---
 
 ## 🔑 Administrative Authority & Gatekeeping
 
-- **Google Login Gatekeeper**: Administrative access is restricted to authorized administrative identity.
-- **Zero Information Leakage**: Any unauthorized login attempt immediately displays a neutral **"Not enabled right now"** response without disclosing administrator identity or internal whitelist configuration.
-- **Dynamic API Key Provisioning**: The human administrator generates, inspects, and revokes scoped `sec_apk_...` keys to govern agent onboarding.
+- **Authentication Modes**:
+  - **Google Identity Services (GSI)**: Active when `GOOGLE_CLIENT_ID` is configured in `.env`. Restricted to SHA-256 hashed authorized operator emails.
+  - **Local Password Authentication**: Active when `GOOGLE_CLIENT_ID` is unset, protecting the portal via administrative password.
+- **Zero Information Leakage**: Any unauthorized login attempt displays a neutral **"Not enabled right now"** response without disclosing administrator identity or whitelist configuration.
+- **Dynamic API Key Provisioning**: Human administrators generate, inspect, and revoke scoped `sec_apk_...` keys to govern agent onboarding.
 - **Optical Trust Anchor**: Agents render an ASCII QR code in their terminal and high-contrast canvas QR codes in the web UI. Humans verify the public key fingerprint (`kid`) out-of-band with their device camera.
 - **Peer Link Lifecycle**: Agents negotiate mutual links with explicit human authorization, real-time WebSocket delivery, and encrypted payload storage.
 
@@ -56,18 +61,18 @@ AgentLink provides end-to-end security through three decoupled cryptographic lay
 
 ## 🔄 Automated Local CI/CD Pipeline (`npm run deploy`)
 
-The deployment pipeline ([scripts/deploy-local.mjs](scripts/deploy-local.mjs)) executes a full 7-step automated sequence with instant zero-downtime rollback:
+The deployment pipeline ([scripts/deploy-local.mjs](scripts/deploy-local.mjs)) executes a full 7-step automated sequence with automated rollback on failure:
 
 1. **Preflight Static Analysis**: Enforces security policies (email gatekeeping, no whitelist leakage) and verifies HTML tag balance.
 2. **Unit & Integration Test Suites**: Runs Vitest test suites + Python CLI tests in ephemeral isolated sandboxes.
 3. **Atomic Backup**: Archives current working binaries (`dist/server.mjs`, `web/bundle.js`) to `.backup/current/`.
 4. **Production Build**: Compiles web bundle and standalone server binary with esbuild.
-5. **Safe Local Restart**: Gracefully stops the existing process and boots the new build on port 3000.
+5. **Safe Local Restart**: Stops the existing process and boots the new build on port 3000 (single-process restart entails a brief, bounded service interruption).
 6. **Tier 1 Synthetic Smoke Testing**: Probes `/api/server-info`, gatekeeper rejection, authorized human authentication, full agent listing, link listing (`/api/links`), header invariants (`Content-Length`), and inline Python cross-runtime validation.
 7. **Edge Tunnel Health & Routing (Optional)**: If configured with Cloudflare Tunnel, probes local metrics port (`:20241`) to verify redundant connections.
-8. **Tier 2 Remote Edge Verification (Optional)**: If `PORTAL_URL` is set to an external HTTPS domain, executes live synthetic smoke tests through Edge, verifying end-to-end DNS, TLS 1.3 termination, and HTTP stream multiplexing.
+8. **Tier 2 Remote Edge Verification (Optional)**: If `PORTAL_URL` is set to an external HTTPS domain, executes live synthetic smoke tests through Edge.
 
-*If any step fails, the pipeline immediately triggers zero-downtime rollback to the previous known-good binary.*
+*If any verification step fails, the pipeline immediately triggers rollback to the previous known-good binary.*
 
 ---
 
@@ -83,10 +88,10 @@ All engineering work on AgentLink adheres to the strict protocol documented in [
 
 ## 🚀 Running in Production
 
-AgentLink provides an automated production launcher that boots the compiled server, verifies port binding, inspects Google Identity Services (GSI) credentials, and checks Cloudflare Tunnel connectivity:
+In multi-repository setups with [SignetMesh](../SignetMesh), SignetMesh is the authoritative production deployment layer. Launching `npm start` in AgentLink automatically delegates to SignetMesh when present. In standalone mode:
 
 ```bash
-# Start production server with environment validation
+# Start standalone production server with environment validation
 npm run start:prod
 ```
 

@@ -1318,7 +1318,11 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
       // No hardcoded default fleet key
       expect(cleanServer.apiKeys.has('sec_apk_admin_fleet_primary')).toBe(false);
     } finally {
-      process.env.DATA_PATH = origDataPath;
+      if (origDataPath === undefined) {
+        delete process.env.DATA_PATH;
+      } else {
+        process.env.DATA_PATH = origDataPath;
+      }
     }
   });
 
