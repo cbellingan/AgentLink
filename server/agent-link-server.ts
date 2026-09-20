@@ -22,8 +22,7 @@ export class AgentLinkServer {
   // Obfuscated SHA-256 hash of authorized administrator email
   public readonly adminEmailHash: string;
   // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
-  public readonly authorizedEmailHashes: Set<string>;
-  public adminPassword: string = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === 'production' ? '' : 'AdminSecure2026!');
+  public adminPassword: string = process.env.ADMIN_PASSWORD || ((process.env.NODE_ENV === 'production' && process.env.ALLOW_DEFAULT_PASSWORD !== 'true') ? '' : 'AdminSecure2026!');
   public bindHost?: string;
 
   // Feature 11: Modular Data Plane & Control Plane Separation
@@ -1336,7 +1335,8 @@ Instructions for your Agent:
         }
 
         if (process.env.NODE_ENV === 'production') {
-          if (!this.adminPassword || this.adminPassword === 'AdminSecure2026!' || password === 'AdminSecure2026!') {
+          const allowDefault = process.env.ALLOW_DEFAULT_PASSWORD === 'true';
+          if (!this.adminPassword || (!allowDefault && (this.adminPassword === 'AdminSecure2026!' || password === 'AdminSecure2026!'))) {
             setSecurityNote(`LOGIN REJECTED: Predictable default password forbidden in production`);
             this.sendJson(res, 401, {
               error: 'invalid_credentials',
