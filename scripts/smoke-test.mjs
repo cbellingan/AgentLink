@@ -85,7 +85,17 @@ async function run() {
       },
       body: JSON.stringify({ email: 'intruder@example.org' }),
     });
-    if (res.status !== 403) throw new Error(`Expected 403, got ${res.status}`);
+    if (res.status === 401) {
+      // In production, plain email without Google ID token is strictly rejected with 401 credential_required
+      const rawText = await res.text();
+      verifyHeaders(res, rawText);
+      const data = JSON.parse(rawText);
+      if (data.error !== 'credential_required') {
+        throw new Error(`Expected 'credential_required', got '${data.error}'`);
+      }
+      return;
+    }
+    if (res.status !== 403) throw new Error(`Expected 403 or 401, got ${res.status}`);
     const rawText = await res.text();
     verifyHeaders(res, rawText);
     const data = JSON.parse(rawText);

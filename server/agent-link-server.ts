@@ -931,7 +931,7 @@ Instructions for your Agent:
           }
 
           const testSecretHeader = req.headers['x-test-auth-secret'];
-          const configuredTestSecret = process.env.TEST_AUTH_SECRET || (process.env.NODE_ENV === 'test' ? 'test_sec_mesh_secret_2026' : undefined);
+          const configuredTestSecret = process.env.TEST_AUTH_SECRET || (process.env.NODE_ENV !== 'production' ? 'test_sec_mesh_secret_2026' : undefined);
           const isTestAuthorized = Boolean(configuredTestSecret && testSecretHeader && testSecretHeader === configuredTestSecret);
           const isDevOrTest = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development';
 
