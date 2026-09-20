@@ -21,8 +21,8 @@ import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
-// Attempt to load .env from current directory or SignetMesh
-for (const envPath of ['.env', '../SignetMesh/.env', '../../SignetMesh/.env']) {
+// Load environment from SignetMesh/.env if present, then .env
+for (const envPath of ['../SignetMesh/.env', '../../SignetMesh/.env', '.env']) {
   if (fs.existsSync(envPath)) {
     try {
       const lines = fs.readFileSync(envPath, 'utf8').split('\n');
@@ -33,11 +33,13 @@ for (const envPath of ['.env', '../SignetMesh/.env', '../../SignetMesh/.env']) {
         if (eqIdx > 0) {
           const key = trimmed.slice(0, eqIdx).trim();
           const val = trimmed.slice(eqIdx + 1).trim();
-          if (!process.env[key]) process.env[key] = val;
+          // Override dummy/test placeholder defaults with real credentials
+          if (!process.env[key] || process.env[key] === 'admin@test.local' || process.env[key] === 'change-me-in-production') {
+            process.env[key] = val;
+          }
         }
       }
     } catch {}
-    break;
   }
 }
 
@@ -724,6 +726,7 @@ export class TuiRenderer {
 
   start() {
     process.stdout.write('\x1b[?1049h'); // Enter alternate screen buffer
+    process.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h'); // Enable SGR mouse tracking
     process.stdout.write('\x1b[?25h');   // Ensure cursor visible
     process.stdout.on('resize', this.boundResize);
     this.render();
@@ -731,7 +734,9 @@ export class TuiRenderer {
 
   stop() {
     process.stdout.removeListener('resize', this.boundResize);
+    process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l'); // Disable mouse tracking
     process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer
+    process.stdout.write('\x1b[?25h');
   }
 
   onResize() {
@@ -743,18 +748,16 @@ export class TuiRenderer {
   // Draw box border with text
   render() {
     const W = Math.max(this.cols, 80);
-    const H = Math.max(this.rows, 28);
+    const H = Math.max(this.rows, 24);
 
-    // Heights allocation
-    const topH = Math.max(10, Math.floor(H * 0.40));
-    const midH = Math.max(6, Math.floor(H * 0.22));
-    const botH = H - topH - midH - 2;
+    // Heights allocation ensuring total lines NEVER exceed H - 1
+    const topH = Math.max(8, Math.floor(H * 0.38));
+    const midH = Math.max(5, Math.floor(H * 0.22));
+    const botH = H - topH - midH - 1;
 
     const colW1 = Math.floor((W - 4) / 3);
     const colW2 = colW1;
     const colW3 = W - 4 - colW1 - colW2;
-
-    let buf = '\x1b[H'; // Cursor to top-left
 
     const activeIdx = this.manager.activePaneIndex;
 
@@ -768,22 +771,25 @@ export class TuiRenderer {
       return str + ' '.repeat(Math.max(0, len - stripped.length));
     };
 
+    const lines = [];
+
     // 1. Top Row: 3 Columns (Bot A | Human | Bot B)
     const titleA = activeIdx === 0 ? `\x1b[1;35m[1] Bot A: ${this.manager.botA.agentId} (ACTIVE)\x1b[0m` : `[1] Bot A: ${this.manager.botA.agentId}`;
     const titleH = activeIdx === 1 ? `\x1b[1;33m[2] Human Operator (ACTIVE)\x1b[0m` : `[2] Human Operator`;
     const titleB = activeIdx === 2 ? `\x1b[1;36m[3] Bot B: ${this.manager.botB.agentId} (ACTIVE)\x1b[0m` : `[3] Bot B: ${this.manager.botB.agentId}`;
 
-    buf += `┌─ ${titleA} ${'─'.repeat(Math.max(0, colW1 - 18))}┬─ ${titleH} ${'─'.repeat(Math.max(0, colW2 - 22))}┬─ ${titleB} ${'─'.repeat(Math.max(0, colW3 - 18))}┐\n`;
+    lines.push(`┌─ ${titleA} ${'─'.repeat(Math.max(0, colW1 - 18))}┬─ ${titleH} ${'─'.repeat(Math.max(0, colW2 - 22))}┬─ ${titleB} ${'─'.repeat(Math.max(0, colW3 - 18))}┐`);
 
-    const logsA = this.manager.logs.botA.slice(-(topH - 3));
-    const logsH = this.manager.logs.human.slice(-(topH - 3));
-    const logsB = this.manager.logs.botB.slice(-(topH - 3));
+    const contentRowsTop = topH - 3;
+    const logsA = this.manager.logs.botA.slice(-contentRowsTop);
+    const logsH = this.manager.logs.human.slice(-contentRowsTop);
+    const logsB = this.manager.logs.botB.slice(-contentRowsTop);
 
-    for (let r = 0; r < topH - 3; r++) {
+    for (let r = 0; r < contentRowsTop; r++) {
       const lineA = formatCell(logsA[r] || '', colW1);
       const lineH = formatCell(logsH[r] || '', colW2);
       const lineB = formatCell(logsB[r] || '', colW3);
-      buf += `│${lineA}│${lineH}│${lineB}│\n`;
+      lines.push(`│${lineA}│${lineH}│${lineB}│`);
     }
 
     // Prompt row for top columns
@@ -795,33 +801,36 @@ export class TuiRenderer {
     const cellPromptH = activeIdx === 1 ? `\x1b[1;33m${formatCell(promptH, colW2)}\x1b[0m` : formatCell(promptH, colW2);
     const cellPromptB = activeIdx === 2 ? `\x1b[1;36m${formatCell(promptB, colW3)}\x1b[0m` : formatCell(promptB, colW3);
 
-    buf += `├${'─'.repeat(colW1)}┼${'─'.repeat(colW2)}┼${'─'.repeat(colW3)}┤\n`;
-    buf += `│${cellPromptA}│${cellPromptH}│${cellPromptB}│\n`;
+    lines.push(`├${'─'.repeat(colW1)}┼${'─'.repeat(colW2)}┼${'─'.repeat(colW3)}┤`);
+    lines.push(`│${cellPromptA}│${cellPromptH}│${cellPromptB}│`);
 
     // 2. Middle Row: Encrypted flow with IDs (Full Width)
-    buf += `├─ \x1b[1;32m📦 Encrypted Flow with Wire IDs (Real-Time Transit)\x1b[0m ${'─'.repeat(Math.max(0, W - 53))}┤\n`;
-    const logsEnc = this.manager.logs.encrypted.slice(-(midH - 2));
-    for (let r = 0; r < midH - 2; r++) {
+    lines.push(`├─ \x1b[1;32m📦 Encrypted Flow with Wire IDs (Real-Time Transit)\x1b[0m ${'─'.repeat(Math.max(0, W - 53))}┤`);
+    const contentRowsMid = midH - 2;
+    const logsEnc = this.manager.logs.encrypted.slice(-contentRowsMid);
+    for (let r = 0; r < contentRowsMid; r++) {
       const lineEnc = formatCell(logsEnc[r] || '', W - 2);
-      buf += `│${lineEnc}│\n`;
+      lines.push(`│${lineEnc}│`);
     }
 
     // 3. Bottom Row: Decrypted flow using Human Key (Full Width)
-    buf += `├─ \x1b[1;34m💬 Decrypted Flow using Human Key (Link Telemetry & Conversation Flow)\x1b[0m ${'─'.repeat(Math.max(0, W - 72))}┤\n`;
-    const logsDec = this.manager.logs.decrypted.slice(-(botH - 2));
-    for (let r = 0; r < botH - 2; r++) {
+    lines.push(`├─ \x1b[1;34m💬 Decrypted Flow using Human Key (Link Telemetry & Conversation Flow)\x1b[0m ${'─'.repeat(Math.max(0, W - 72))}┤`);
+    const contentRowsBot = botH - 2;
+    const logsDec = this.manager.logs.decrypted.slice(-contentRowsBot);
+    for (let r = 0; r < contentRowsBot; r++) {
       const lineDec = formatCell(logsDec[r] || '', W - 2);
-      buf += `│${lineDec}│\n`;
+      lines.push(`│${lineDec}│`);
     }
 
-    buf += `└─ \x1b[2m[Tab] Switch Shell (1: Bot A | 2: Human | 3: Bot B) • [Ctrl+C] Exit • Type "help"\x1b[0m ${'─'.repeat(Math.max(0, W - 80))}┘`;
+    lines.push(`└─ \x1b[2m[Click/Tab] Switch Shell (1: Bot A | 2: Human | 3: Bot B) • [Ctrl+C] Exit • Type "help"\x1b[0m ${'─'.repeat(Math.max(0, W - 85))}┘`);
 
-    process.stdout.write(buf);
+    // Write full screen atomically with clear screen to prevent duplicate headers
+    const screenBuffer = '\x1b[?25l\x1b[H\x1b[2J' + lines.join('\r\n');
+    process.stdout.write(screenBuffer);
 
     // Place cursor at active prompt
     const promptY = topH;
     let promptX = 1;
-    let curBuffer = '';
     if (activeIdx === 0) {
       promptX = 9 + this.manager.inputBuffers.botA.length;
     } else if (activeIdx === 1) {
@@ -829,12 +838,12 @@ export class TuiRenderer {
     } else {
       promptX = colW1 + colW2 + 10 + this.manager.inputBuffers.botB.length;
     }
-    process.stdout.write(`\x1b[${promptY};${Math.min(promptX, W - 1)}H`);
+    process.stdout.write(`\x1b[${promptY};${Math.min(promptX, W - 1)}H\x1b[?25h`);
   }
 }
 
 // -----------------------------------------------------------------------------
-// Interactive Keyboard Loop
+// Interactive Keyboard & Mouse Loop
 // -----------------------------------------------------------------------------
 export function runInteractive(manager) {
   const renderer = new TuiRenderer(manager);
@@ -843,7 +852,7 @@ export function runInteractive(manager) {
   // Periodic redraw to render incoming messages & wire telemetry
   const renderInterval = setInterval(() => {
     renderer.render();
-  }, 200);
+  }, 250);
 
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
@@ -861,9 +870,38 @@ export function runInteractive(manager) {
 
       const activePane = manager.getActivePane();
 
+      // SGR Mouse Click Handling (\x1b[<button;col;row;M or m)
+      const mouseMatch = key.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+      if (mouseMatch) {
+        const btn = parseInt(mouseMatch[1], 10);
+        const col = parseInt(mouseMatch[2], 10);
+        const row = parseInt(mouseMatch[3], 10);
+        const isRelease = mouseMatch[4] === 'm';
+
+        // Left Click (button 0)
+        if (!isRelease && btn === 0) {
+          const W = Math.max(process.stdout.columns || 120, 80);
+          const H = Math.max(process.stdout.rows || 36, 24);
+          const topH = Math.max(8, Math.floor(H * 0.38));
+          const colW1 = Math.floor((W - 4) / 3);
+          const colW2 = colW1;
+
+          if (row <= topH + 1) {
+            if (col < colW1 + 2) {
+              manager.switchPane(0); // Bot A
+            } else if (col < colW1 + colW2 + 3) {
+              manager.switchPane(1); // Human
+            } else {
+              manager.switchPane(2); // Bot B
+            }
+            renderer.render();
+          }
+        }
+        return;
+      }
+
       // Tab or Shift+Tab: Cycle active prompt pane
       if (key === '\t') {
-        // If current buffer has text, attempt auto-completion first!
         const cur = manager.inputBuffers[activePane];
         if (cur.trim()) {
           const comps = manager.getCompletions(activePane, cur);
@@ -873,7 +911,6 @@ export function runInteractive(manager) {
             return;
           }
         }
-        // Otherwise switch pane
         manager.cyclePane(1);
         renderer.render();
         return;
@@ -925,6 +962,18 @@ export function runInteractive(manager) {
       if (key === '\u001bOP') { manager.switchPane(0); renderer.render(); return; }
       if (key === '\u001bOQ') { manager.switchPane(1); renderer.render(); return; }
       if (key === '\u001bOR') { manager.switchPane(2); renderer.render(); return; }
+
+      // When input buffer is empty, pressing 1, 2, or 3 instantly switches panes
+      if (!manager.inputBuffers[activePane]) {
+        if (key === '1') { manager.switchPane(0); renderer.render(); return; }
+        if (key === '2') { manager.switchPane(1); renderer.render(); return; }
+        if (key === '3') { manager.switchPane(2); renderer.render(); return; }
+      }
+
+      // Ignore any other escape sequence to prevent polluting input with garbage characters
+      if (key.startsWith('\x1b')) {
+        return;
+      }
 
       // Printable character
       if (key.length === 1 && key >= ' ') {
