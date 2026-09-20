@@ -19,6 +19,7 @@
     "tunnel": "node scripts/tunnel.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "repl": "node scripts/repl.mjs",
     "audit:security": "node scripts/security-auditor.mjs",
     "bug": "node scripts/get-bug.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
