@@ -121,7 +121,7 @@ async function run() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          password: process.env.ADMIN_PASSWORD || 'AdminSecure2026!',
+          password: process.env.ADMIN_PASSWORD || '',
         }),
       });
     }

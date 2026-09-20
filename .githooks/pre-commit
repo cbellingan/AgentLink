@@ -3,7 +3,16 @@ set -e
 
 echo "🔒 [Git Hook: pre-commit] Inspecting staged changes..."
 
-# 1. Check for merge conflict markers in staged content (excluding hook code and test fixtures)
+# 1. Block staging of actual .env files
+STAGED_ENV=$(git diff --cached --name-only | grep -E "(^\.env$|\.env\.local|\.env\.production)" || true)
+if [ -n "$STAGED_ENV" ]; then
+  echo "❌ [Git Hook: pre-commit] CRITICAL: Live .env file detected in staged content:"
+  echo "$STAGED_ENV"
+  echo "👉 Never commit live .env secrets! Unstage with: git reset HEAD $STAGED_ENV"
+  exit 1
+fi
+
+# 2. Check for merge conflict markers in staged content (excluding hook code and test fixtures)
 CONFLICT_MARKERS=$(git diff --cached -G"^[<]{7}[[:space:]]" --name-only | grep -v "\.githooks" | grep -v "git-hooks\.test" || true)
 if [ -n "$CONFLICT_MARKERS" ]; then
   echo "❌ [Git Hook: pre-commit] Merge conflict marker '<<<<<<<' detected in staged file(s):"
@@ -12,8 +21,8 @@ if [ -n "$CONFLICT_MARKERS" ]; then
   exit 1
 fi
 
-# 2. Check for staged private key dumps (excluding test fixtures and hook scripts)
-STAGED_KEYS=$(git diff --cached -G"(ed25519_priv_b64|x25519_priv_b64)" --name-only | grep -v "test" | grep -v "\.githooks" || true)
+# 3. Check for staged private key dumps (excluding test fixtures, hook scripts, and security scanner)
+STAGED_KEYS=$(git diff --cached -G"(ed25519_priv_b64|x25519_priv_b64)" --name-only | grep -v "test" | grep -v "\.githooks" | grep -v "security-auditor" || true)
 if [ -n "$STAGED_KEYS" ]; then
   echo "❌ [Git Hook: pre-commit] Accidental private key detected in staged non-test file(s):"
   echo "$STAGED_KEYS"
@@ -21,9 +30,9 @@ if [ -n "$STAGED_KEYS" ]; then
   exit 1
 fi
 
-# 3. Run security auditor if configured
-if [ -f package.json ] && grep -q '"audit:security"' package.json; then
-  npm run audit:security
+# 4. Run automated security scanner on staged changes
+if [ -f scripts/security-auditor.mjs ]; then
+  node scripts/security-auditor.mjs --staged
 fi
 
 echo "✅ [Git Hook: pre-commit] Staged checks passed!"

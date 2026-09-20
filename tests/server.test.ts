@@ -71,7 +71,7 @@ describe('AgentLink Server Test Suite', () => {
     const res = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: 'AdminSecure2026!' }),
+      body: JSON.stringify({ password: server.adminPassword }),
     });
     expect(res.status).toBe(200);
     const data = await res.json();

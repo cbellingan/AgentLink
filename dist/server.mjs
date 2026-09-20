@@ -1077,8 +1077,7 @@ var AgentLinkServer = class {
   wss = null;
   // Obfuscated SHA-256 hash of authorized administrator email
   adminEmailHash;
-  // Obfuscated SHA-256 hashes of authorized operator/administrator accounts
-  adminPassword = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === "production" && process.env.ALLOW_DEFAULT_PASSWORD !== "true" ? "" : "AdminSecure2026!");
+  adminPassword;
   bindHost;
   // Feature 11: Modular Data Plane & Control Plane Separation
   dataPlane;
@@ -1122,6 +1121,7 @@ var AgentLinkServer = class {
     const opts = typeof portOrOptions === "object" && portOrOptions !== null ? portOrOptions : {};
     this.port = typeof portOrOptions === "number" ? portOrOptions : opts.port ?? 3e3;
     this.staticPath = opts.staticPath || staticPath2 || path2.resolve("web");
+    this.adminPassword = opts.adminPassword ?? (process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === "test" ? "test_admin_pwd" : ""));
     this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto2.createHash("sha256").update((process.env.ADMIN_EMAIL || "admin@test.local").toLowerCase()).digest("hex");
     const defaultHashes = [
       this.adminEmailHash
@@ -2232,19 +2232,18 @@ Instructions for your Agent:
             return;
           }
           if (process.env.NODE_ENV === "production") {
-            const allowDefault = process.env.ALLOW_DEFAULT_PASSWORD === "true";
-            if (!this.adminPassword || !allowDefault && (this.adminPassword === "AdminSecure2026!" || password === "AdminSecure2026!")) {
-              setSecurityNote(`LOGIN REJECTED: Predictable default password forbidden in production`);
+            if (!this.adminPassword) {
+              setSecurityNote(`LOGIN REJECTED: ADMIN_PASSWORD not configured in production`);
               this.sendJson(res, 401, {
                 error: "invalid_credentials",
-                message: "Production requires an explicit, non-default ADMIN_PASSWORD"
+                message: "Production requires an explicit ADMIN_PASSWORD environment variable"
               });
               return;
             }
           }
-          if (!password || password !== this.adminPassword) {
+          if (!password || !this.adminPassword || password !== this.adminPassword) {
             setSecurityNote(`INVALID PASSWORD for ${email || "admin"}`);
-            this.sendJson(res, 401, { error: "invalid_credentials", message: "Invalid password" });
+            this.sendJson(res, 401, { error: "invalid_credentials", message: "Invalid credentials" });
             return;
           }
           const isAdmin = !email || emailHash === this.adminEmailHash;

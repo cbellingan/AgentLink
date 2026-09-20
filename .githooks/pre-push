@@ -17,7 +17,16 @@ if [ "$IS_DELETE_ONLY" = true ]; then
   exit 0
 fi
 
-# Run test suite
+# 1. Run full automated security scanner
+echo "🔒 Running automated security scanner..."
+if [ -f scripts/security-auditor.mjs ]; then
+  if ! node scripts/security-auditor.mjs; then
+    echo "❌ [Git Hook: pre-push] Security scanner detected violations! Push blocked."
+    exit 1
+  fi
+fi
+
+# 2. Run test suite
 echo "🧪 Running full test suite..."
 if ! npm test; then
   echo "❌ [Git Hook: pre-push] Tests failed! Push blocked."

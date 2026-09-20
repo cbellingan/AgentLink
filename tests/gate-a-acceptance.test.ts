@@ -753,11 +753,11 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
       const prodPort = await prodServer.listen();
       const prodUrl = `http://127.0.0.1:${prodPort}`;
 
-      // 2. Default predictable password 'AdminSecure2026!' is rejected
+      // 2. Unconfigured password rejected in production when ADMIN_PASSWORD is unset
       const pwdLogin = await fetch(`${prodUrl}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'admin@signetmesh.internal', password: 'AdminSecure2026!' }),
+        body: JSON.stringify({ email: 'admin@signetmesh.internal', password: 'random_attempted_password' }),
       });
       expect(pwdLogin.status).toBe(401);
       const pwdBody = await pwdLogin.json();
