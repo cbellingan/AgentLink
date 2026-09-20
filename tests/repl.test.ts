@@ -8,6 +8,7 @@ import {
   decryptPayload,
   signEnvelope,
   ReplManager,
+  TuiRenderer,
 } from '../scripts/repl.mjs';
 
 describe('Feature: AgentMesh Multi-Pane Terminal REPL & Telemetry Monitor', () => {
@@ -156,5 +157,75 @@ describe('Feature: AgentMesh Multi-Pane Terminal REPL & Telemetry Monitor', () =
     expect(repl.logs.human.some(l => l.includes(repl.activeLinkId!))).toBe(true);
 
     repl.stop();
+  });
+
+  it('5. TUI renderer guarantees exact terminal line widths and non-offset cursor positioning', () => {
+    const repl = new ReplManager();
+    repl.botA.agentId = 'bot-alpha';
+    repl.botB.agentId = 'bot-beta';
+    const renderer = new TuiRenderer(repl);
+
+    // Test across various pane selections and input buffers
+    const cases = [
+      { pane: 0, bufferKey: 'botA' as const, text: 'send "hello"' },
+      { pane: 1, bufferKey: 'human' as const, text: 'cursur....' },
+      { pane: 2, bufferKey: 'botB' as const, text: 'whoami' },
+    ];
+
+    for (const c of cases) {
+      repl.switchPane(c.pane);
+      repl.inputBuffers[c.bufferKey] = c.text;
+
+      renderer.cols = 120;
+      renderer.rows = 36;
+
+      let output = '';
+      const origWrite = process.stdout.write;
+      process.stdout.write = (chunk: any) => {
+        output += chunk;
+        return true;
+      };
+      renderer.render();
+      process.stdout.write = origWrite;
+
+      // Extract cursor escape code: \x1b[Y;XH
+      const cursorMatches = output.match(/\x1b\[(\d+);(\d+)H/g);
+      expect(cursorMatches).toBeDefined();
+      const lastCursor = cursorMatches![cursorMatches!.length - 1];
+      const m = lastCursor.match(/\x1b\[(\d+);(\d+)H/);
+      expect(m).not.toBeNull();
+      const curY = parseInt(m![1], 10);
+      const curX = parseInt(m![2], 10);
+
+      // Strip ANSI escape codes
+      const body = output.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+      const lines = body.split('\r\n');
+
+      // 1. Every rendered line must match terminal width W exactly (zero line-wrapping)
+      for (let i = 0; i < lines.length; i++) {
+        expect(lines[i].length).toBe(120);
+      }
+
+      // 2. Total rendered lines must be strictly less than H to prevent auto-scrolling
+      expect(lines.length).toBeLessThan(36);
+
+      // 3. The cursor row (curY, 1-indexed) must point precisely to the prompt line
+      const promptLine = lines[curY - 1];
+      expect(promptLine).toBeDefined();
+
+      if (c.pane === 0) {
+        expect(promptLine).toContain('Bot A > ' + c.text);
+      } else if (c.pane === 1) {
+        expect(promptLine).toContain('Human > ' + c.text);
+      } else {
+        expect(promptLine).toContain('Bot B > ' + c.text);
+      }
+
+      // 4. Cursor column (curX, 1-indexed) must point to the space immediately following the text
+      const charBeforeCursor = promptLine[curX - 2];
+      const charAtCursor = promptLine[curX - 1];
+      expect(charBeforeCursor).toBe(c.text.slice(-1));
+      expect(charAtCursor).toBe(' ');
+    }
   });
 });

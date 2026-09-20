@@ -750,10 +750,10 @@ export class TuiRenderer {
     const W = Math.max(this.cols, 80);
     const H = Math.max(this.rows, 24);
 
-    // Heights allocation ensuring total lines NEVER exceed H - 1
+    // Heights allocation ensuring total lines NEVER exceed H - 2
     const topH = Math.max(8, Math.floor(H * 0.38));
     const midH = Math.max(5, Math.floor(H * 0.22));
-    const botH = H - topH - midH - 1;
+    const botH = Math.max(5, H - topH - midH - 2);
 
     const colW1 = Math.floor((W - 4) / 3);
     const colW2 = colW1;
@@ -761,14 +761,44 @@ export class TuiRenderer {
 
     const activeIdx = this.manager.activePaneIndex;
 
-    // Helper: truncate or pad string
+    // Helper: truncate or pad string to exact width
     const formatCell = (str, len) => {
-      // Strip ANSI for length calculation
       const stripped = str.replace(/\x1b\[[0-9;]*m/g, '');
       if (stripped.length > len) {
         return str.slice(0, len);
       }
       return str + ' '.repeat(Math.max(0, len - stripped.length));
+    };
+
+    // Helper: format header border cell: ─ [Title] ──────
+    const formatHeaderCell = (title, width) => {
+      const stripped = title.replace(/\x1b\[[0-9;]*m/g, '');
+      const prefix = '─ ';
+      const suffix = ' ';
+      const needed = prefix.length + stripped.length + suffix.length;
+      if (needed >= width) {
+        const maxLen = Math.max(1, width - prefix.length - suffix.length);
+        const colorMatch = title.match(/^\x1b\[[0-9;]*m/);
+        const color = colorMatch ? colorMatch[0] : '';
+        const reset = color ? '\x1b[0m' : '';
+        return prefix + color + stripped.slice(0, maxLen) + reset + suffix;
+      }
+      const padDashes = width - needed;
+      return prefix + title + suffix + '─'.repeat(padDashes);
+    };
+
+    // Helper: format full-width border with title: ├─ [Title] ──────┤
+    const formatBorderWithTitle = (leftChar, title, rightChar, width) => {
+      const stripped = title.replace(/\x1b\[[0-9;]*m/g, '');
+      const prefix = leftChar + '─ ';
+      const suffix = ' ' + rightChar;
+      const needed = prefix.length + stripped.length + suffix.length;
+      if (needed >= width) {
+        const maxLen = Math.max(1, width - prefix.length - suffix.length);
+        return prefix + stripped.slice(0, maxLen) + suffix;
+      }
+      const padDashes = width - needed;
+      return leftChar + '─ ' + title + ' ' + '─'.repeat(padDashes) + rightChar;
     };
 
     const lines = [];
@@ -778,7 +808,7 @@ export class TuiRenderer {
     const titleH = activeIdx === 1 ? `\x1b[1;33m[2] Human Operator (ACTIVE)\x1b[0m` : `[2] Human Operator`;
     const titleB = activeIdx === 2 ? `\x1b[1;36m[3] Bot B: ${this.manager.botB.agentId} (ACTIVE)\x1b[0m` : `[3] Bot B: ${this.manager.botB.agentId}`;
 
-    lines.push(`┌─ ${titleA} ${'─'.repeat(Math.max(0, colW1 - 18))}┬─ ${titleH} ${'─'.repeat(Math.max(0, colW2 - 22))}┬─ ${titleB} ${'─'.repeat(Math.max(0, colW3 - 18))}┐`);
+    lines.push(`┌${formatHeaderCell(titleA, colW1)}┬${formatHeaderCell(titleH, colW2)}┬${formatHeaderCell(titleB, colW3)}┐`);
 
     const contentRowsTop = topH - 3;
     const logsA = this.manager.logs.botA.slice(-contentRowsTop);
@@ -805,7 +835,7 @@ export class TuiRenderer {
     lines.push(`│${cellPromptA}│${cellPromptH}│${cellPromptB}│`);
 
     // 2. Middle Row: Encrypted flow with IDs (Full Width)
-    lines.push(`├─ \x1b[1;32m📦 Encrypted Flow with Wire IDs (Real-Time Transit)\x1b[0m ${'─'.repeat(Math.max(0, W - 53))}┤`);
+    lines.push(formatBorderWithTitle('├', '\x1b[1;32m📦 Encrypted Flow with Wire IDs (Real-Time Transit)\x1b[0m', '┤', W));
     const contentRowsMid = midH - 2;
     const logsEnc = this.manager.logs.encrypted.slice(-contentRowsMid);
     for (let r = 0; r < contentRowsMid; r++) {
@@ -814,7 +844,7 @@ export class TuiRenderer {
     }
 
     // 3. Bottom Row: Decrypted flow using Human Key (Full Width)
-    lines.push(`├─ \x1b[1;34m💬 Decrypted Flow using Human Key (Link Telemetry & Conversation Flow)\x1b[0m ${'─'.repeat(Math.max(0, W - 72))}┤`);
+    lines.push(formatBorderWithTitle('├', '\x1b[1;34m💬 Decrypted Flow using Human Key (Link Telemetry & Conversation Flow)\x1b[0m', '┤', W));
     const contentRowsBot = botH - 2;
     const logsDec = this.manager.logs.decrypted.slice(-contentRowsBot);
     for (let r = 0; r < contentRowsBot; r++) {
@@ -822,21 +852,24 @@ export class TuiRenderer {
       lines.push(`│${lineDec}│`);
     }
 
-    lines.push(`└─ \x1b[2m[Click/Tab] Switch Shell (1: Bot A | 2: Human | 3: Bot B) • [Ctrl+C] Exit • Type "help"\x1b[0m ${'─'.repeat(Math.max(0, W - 85))}┘`);
+    lines.push(formatBorderWithTitle('└', '\x1b[2m[Click/Tab] Switch Shell (1: Bot A | 2: Human | 3: Bot B) • [Ctrl+C] Exit • Type "help"\x1b[0m', '┘', W));
 
-    // Write full screen atomically with clear screen to prevent duplicate headers
-    const screenBuffer = '\x1b[?25l\x1b[H\x1b[2J' + lines.join('\r\n');
+    // Write full screen atomically with clear screen to prevent duplicate headers or auto-scroll
+    const screenBuffer = '\x1b[?25l\x1b[2J\x1b[H' + lines.join('\r\n');
     process.stdout.write(screenBuffer);
 
-    // Place cursor at active prompt
-    const promptY = topH;
+    // Calculate exact prompt row coordinate dynamically
+    const promptRowIdx = lines.findIndex(l => l.includes('Bot A >') || l.includes('Human >') || l.includes('Bot B >'));
+    const promptY = promptRowIdx !== -1 ? promptRowIdx + 1 : topH;
+
+    // Place cursor precisely at the end of prompt input
     let promptX = 1;
     if (activeIdx === 0) {
-      promptX = 9 + this.manager.inputBuffers.botA.length;
+      promptX = 10 + this.manager.inputBuffers.botA.length;
     } else if (activeIdx === 1) {
-      promptX = colW1 + 10 + this.manager.inputBuffers.human.length;
+      promptX = colW1 + 11 + this.manager.inputBuffers.human.length;
     } else {
-      promptX = colW1 + colW2 + 10 + this.manager.inputBuffers.botB.length;
+      promptX = colW1 + colW2 + 12 + this.manager.inputBuffers.botB.length;
     }
     process.stdout.write(`\x1b[${promptY};${Math.min(promptX, W - 1)}H\x1b[?25h`);
   }
