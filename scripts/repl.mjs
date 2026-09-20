@@ -363,6 +363,11 @@ export class ReplManager {
             this.symKeyA = deriveSharedKey(this.botA.xKey.privateKey, pubB, pairLink.id);
             this.symKeyB = deriveSharedKey(this.botB.xKey.privateKey, pubA, pairLink.id);
 
+            // Clear processed set so messages can be decrypted with the newly active session keys
+            if (this.processedMsgIds) this.processedMsgIds.clear();
+            this.logs.encrypted = [];
+            this.logs.decrypted = [];
+
             this.log('botA', `🔒 Link ${pairLink.id} ACTIVE! E2EE Session Key Established.`);
             this.log('botB', `🔒 Link ${pairLink.id} ACTIVE! E2EE Session Key Established.`);
             this.log('human', `✅ Link ${pairLink.id} (${this.botA.agentId} ⟷ ${this.botB.agentId}) is ACTIVE!`);
@@ -404,8 +409,9 @@ export class ReplManager {
           this.log('encrypted', `[WIRE] Link: ${this.activeLinkId} | ${m.senderId} ➔ ${target} | Plaintext/Operator Frame | Text: "${(m.text || '').slice(0, 30)}"`);
         }
 
-        // 2. Bottom Pane: Decrypted Flow using Human / Peer Key (Link Telemetry View)
+        // 2. Bottom Pane: Decrypted Flow at Agent Endpoints (Link Telemetry View)
         let plaintext = m.text || '';
+        let decryptedSuccessfully = false;
         if (m.isEncrypted && m.payload && m.payload.data && m.payload.iv) {
           try {
             const symKey = isFromA ? this.symKeyB : this.symKeyA;
@@ -420,17 +426,24 @@ export class ReplManager {
                 m.seq,
                 m.payload.nonce
               );
+              decryptedSuccessfully = true;
             }
           } catch {
             plaintext = `[Ciphertext: ${m.payload.data.slice(0, 16)}...]`;
           }
         }
 
-        // Deliver notification to recipient bot shell
-        if (isFromA) {
-          this.log('botB', `📥 [Received from ${this.botA.agentId}]: "${plaintext}"`);
-        } else if (m.senderId === this.botB.agentId) {
-          this.log('botA', `📥 [Received from ${this.botB.agentId}]: "${plaintext}"`);
+        // Deliver notification to recipient bot shell ONLY if decrypted or operator message
+        if (m.senderType === 'operator') {
+          const operatorMsg = `👑 [Operator Broadcast]: "${m.text || ''}"`;
+          this.log('botA', operatorMsg);
+          this.log('botB', operatorMsg);
+        } else if (decryptedSuccessfully) {
+          if (isFromA) {
+            this.log('botB', `📥 [Received from ${this.botA.agentId}]: "${plaintext}"`);
+          } else if (m.senderId === this.botB.agentId) {
+            this.log('botA', `📥 [Received from ${this.botB.agentId}]: "${plaintext}"`);
+          }
         }
 
         // Format decrypted conversation bubble matching Web UI
@@ -720,12 +733,13 @@ export class TuiRenderer {
   constructor(manager) {
     this.manager = manager;
     this.cols = process.stdout.columns || 120;
-    this.rows = process.stdout.rows || 36;
+    this.rows = process.stdout.rows || 28;
     this.boundResize = this.onResize.bind(this);
   }
 
   start() {
     process.stdout.write('\x1b[?1049h'); // Enter alternate screen buffer
+    process.stdout.write('\x1b[?7l');    // Disable auto-wrap (DECAWM) to prevent line wrapping & auto-scroll
     process.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h'); // Enable SGR mouse tracking
     process.stdout.write('\x1b[?25h');   // Ensure cursor visible
     process.stdout.on('resize', this.boundResize);
@@ -735,25 +749,26 @@ export class TuiRenderer {
   stop() {
     process.stdout.removeListener('resize', this.boundResize);
     process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l'); // Disable mouse tracking
+    process.stdout.write('\x1b[?7h');    // Restore auto-wrap
     process.stdout.write('\x1b[?1049l'); // Leave alternate screen buffer
     process.stdout.write('\x1b[?25h');
   }
 
   onResize() {
     this.cols = process.stdout.columns || 120;
-    this.rows = process.stdout.rows || 36;
+    this.rows = process.stdout.rows || 28;
     this.render();
   }
 
   // Draw box border with text
   render() {
-    const W = Math.max(this.cols, 80);
-    const H = Math.max(this.rows, 24);
+    const W = Math.max(process.stdout.columns || this.cols || 120, 80);
+    const H = Math.max(process.stdout.rows || this.rows || 28, 20);
 
-    // Heights allocation ensuring total lines NEVER exceed H - 2
-    const topH = Math.max(8, Math.floor(H * 0.38));
-    const midH = Math.max(5, Math.floor(H * 0.22));
-    const botH = Math.max(5, H - topH - midH - 2);
+    // Heights allocation ensuring total lines strictly fits within H - 2
+    const topH = Math.max(7, Math.floor((H - 3) * 0.40));
+    const midH = Math.max(4, Math.floor((H - 3) * 0.25));
+    const botH = Math.max(4, (H - 3) - topH - midH);
 
     const colW1 = Math.floor((W - 4) / 3);
     const colW2 = colW1;
@@ -854,8 +869,8 @@ export class TuiRenderer {
 
     lines.push(formatBorderWithTitle('└', '\x1b[2m[Click/Tab] Switch Shell (1: Bot A | 2: Human | 3: Bot B) • [Ctrl+C] Exit • Type "help"\x1b[0m', '┘', W));
 
-    // Write full screen atomically with clear screen to prevent duplicate headers or auto-scroll
-    const screenBuffer = '\x1b[?25l\x1b[2J\x1b[H' + lines.join('\r\n');
+    // Write full screen atomically with clear screen and scrollback to prevent duplicate headers or auto-scroll
+    const screenBuffer = '\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + lines.join('\r\n') + '\x1b[J';
     process.stdout.write(screenBuffer);
 
     // Calculate exact prompt row coordinate dynamically
