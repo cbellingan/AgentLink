@@ -804,4 +804,343 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
       else delete process.env.ADMIN_EMAIL_HASH;
     }
   });
+
+  it('E2E-015: Peer key pinning and relay substitution rejection', async () => {
+    // 1. Both H1 and H2 re-approve Alice-Bob link after key rotation in E2E-013
+    const h1ReApprove = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h1Token}`,
+      },
+    });
+    expect(h1ReApprove.status).toBe(200);
+
+    const h2ReApprove = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h2Token}`,
+      },
+    });
+    expect(h2ReApprove.status).toBe(200);
+
+    const linkActiveCheck = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}`, {
+      headers: { 'Authorization': `Bearer ${h1Token}` },
+    });
+    const linkData = await linkActiveCheck.json();
+    expect(linkData.link.status).toBe('active');
+
+    // 2. Alice sends a message using her rotated keys
+    const sendWithRotatedKey = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--to',
+      'agent-bob',
+      '--message',
+      'Message from Alice using rotated keys',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+      '--json',
+    ]);
+    expect(sendWithRotatedKey.exitCode).toBe(0);
+
+    // 3. Bob polls and receives message: Bob pinned Alice\'s original keys in E2E-007,
+    // so relay-supplied new keys are detected as a key substitution and rejected!
+    const receiveSubstitutedRes = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(receiveSubstitutedRes.exitCode).toBe(0);
+    const subData = JSON.parse(receiveSubstitutedRes.stdout);
+    expect(subData.messages.length).toBe(1);
+    expect(subData.messages[0].verified).toBe(false);
+    expect(subData.messages[0].status).toBe('rejected');
+    expect(subData.messages[0].text).toContain('Peer key substitution detected');
+  });
+
+  it('E2E-014: Two-phase replay protection: forged high-sequence envelope cannot poison sequence state', async () => {
+    // 1. Bob explicitly updates his pinned record for Alice to trust her new rotated keys
+    const bobPinFile = path.join(env.paths.actors['bob'].state, 'pinned_peers_agent-bob.json');
+    const aliceAgent = (server as any).agents.get('agent-alice');
+    let pinnedData: any = {};
+    if (fs.existsSync(bobPinFile)) {
+      pinnedData = JSON.parse(fs.readFileSync(bobPinFile, 'utf8'));
+    }
+    pinnedData[`${aliceBobLinkId}::agent-alice`] = {
+      link_id: aliceBobLinkId,
+      peer_id: 'agent-alice',
+      sign_pub: aliceAgent.signPub,
+      enc_pub: aliceAgent.encPub,
+      kid: aliceAgent.kid,
+      pinned_at: Date.now() / 1000,
+    };
+    fs.writeFileSync(bobPinFile, JSON.stringify(pinnedData, null, 2), 'utf8');
+
+    // 2. Alice sends a legitimate baseline message
+    const sendBaseRes = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--to',
+      'agent-bob',
+      '--message',
+      'Baseline legitimate message',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+      '--json',
+    ]);
+    expect(sendBaseRes.exitCode).toBe(0);
+
+    // 3. Bob receives and verifies baseline message; Bob\'s inbound sequence state is established
+    const recvBaseRes = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(recvBaseRes.exitCode).toBe(0);
+    const recvBaseData = JSON.parse(recvBaseRes.stdout);
+    expect(recvBaseData.messages.length).toBe(1);
+    expect(recvBaseData.messages[0].verified).toBe(true);
+    expect(recvBaseData.messages[0].status).toBe('verified');
+    expect(recvBaseData.messages[0].text).toBe('Baseline legitimate message');
+
+    // 4. Inject a forged message with forged signature and seq=99999 directly into Bob\'s queue
+    const forgedEnvelope = {
+      v: 2,
+      linkId: aliceBobLinkId,
+      senderId: 'agent-alice',
+      recipientId: 'agent-bob',
+      seq: 99999,
+      timestamp: Math.floor(Date.now() / 1000),
+      nonce: crypto.randomBytes(16).toString('hex'),
+      iv: crypto.randomBytes(12).toString('base64'),
+      data: crypto.randomBytes(32).toString('base64'),
+      sig: crypto.randomBytes(64).toString('base64'), // Forged/invalid Ed25519 signature
+    };
+    const forgeSendRes = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aliceApiKey}`,
+      },
+      body: JSON.stringify({
+        senderId: 'agent-alice',
+        payload: forgedEnvelope,
+      }),
+    });
+    expect(forgeSendRes.status).toBe(200);
+
+    // 5. Bob receives the forged message: Phase 1 freshness passes, but crypto verification fails
+    // Phase 2 commit is skipped, so sequence state is NOT poisoned to 99999!
+    const recvForgedRes = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(recvForgedRes.exitCode).toBe(0);
+    const recvForgedData = JSON.parse(recvForgedRes.stdout);
+    expect(recvForgedData.messages.length).toBe(1);
+    expect(recvForgedData.messages[0].verified).toBe(false);
+    expect(recvForgedData.messages[0].status).toBe('rejected');
+    expect(recvForgedData.messages[0].text).toContain('SECURITY REJECTION');
+
+    // 6. Alice sends legitimate subsequent message with lower sequence number (e.g., seq=2)
+    const sendSubsequentRes = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--to',
+      'agent-bob',
+      '--message',
+      'Subsequent legitimate message after forged injection',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+      '--json',
+    ]);
+    expect(sendSubsequentRes.exitCode).toBe(0);
+
+    // 7. Bob receives and verifies subsequent message: proves state was not poisoned by seq=99999
+    const recvSubsequentRes = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(recvSubsequentRes.exitCode).toBe(0);
+    const recvSubsequentData = JSON.parse(recvSubsequentRes.stdout);
+    expect(recvSubsequentData.messages.length).toBe(1);
+    expect(recvSubsequentData.messages[0].verified).toBe(true);
+    expect(recvSubsequentData.messages[0].status).toBe('verified');
+    expect(recvSubsequentData.messages[0].text).toBe('Subsequent legitimate message after forged injection');
+  });
+
+  it('E2E-016: Plaintext rejection by default; accepted only with explicit allow-plaintext policy', async () => {
+    // 1. Send unencrypted raw plaintext string to Bob
+    const ptSend1 = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aliceApiKey}`,
+      },
+      body: JSON.stringify({
+        senderId: 'agent-alice',
+        payload: 'Unencrypted plaintext payload 1',
+      }),
+    });
+    expect(ptSend1.status).toBe(200);
+
+    // 2. Default policy: Bob receives with --decrypt and rejects plaintext
+    const ptRecv1 = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(ptRecv1.exitCode).toBe(0);
+    const ptData1 = JSON.parse(ptRecv1.stdout);
+    expect(ptData1.messages.length).toBe(1);
+    expect(ptData1.messages[0].verified).toBe(false);
+    expect(ptData1.messages[0].status).toBe('rejected');
+    expect(ptData1.messages[0].text).toContain('Plaintext payload rejected by policy');
+
+    // 3. Send another unencrypted raw plaintext string
+    const ptSend2 = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${aliceApiKey}`,
+      },
+      body: JSON.stringify({
+        senderId: 'agent-alice',
+        payload: 'Unencrypted plaintext payload 2',
+      }),
+    });
+    expect(ptSend2.status).toBe(200);
+
+    // 4. Explicit policy: Bob receives with --allow-plaintext
+    const ptRecv2 = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+      '--allow-plaintext',
+    ]);
+    expect(ptRecv2.exitCode).toBe(0);
+    const ptData2 = JSON.parse(ptRecv2.stdout);
+    expect(ptData2.messages.length).toBe(1);
+    expect(ptData2.messages[0].verified).toBe(false);
+    expect(ptData2.messages[0].status).toBe('plaintext');
+    expect(ptData2.messages[0].text).toBe('Unencrypted plaintext payload 2');
+  });
+
+  it('E2E-026: Concurrency-safe replay state locking and visibility of persistence failures', async () => {
+    // 1. Run 5 concurrent CLI send processes from Alice to Bob
+    const concurrentSends = await Promise.all([
+      env.runCli('alice', ['send', '--agent-id', 'agent-alice', '--to', 'agent-bob', '--message', 'Concurrent message 1', '--server', serverUrl, '--api-key', aliceApiKey, '--json']),
+      env.runCli('alice', ['send', '--agent-id', 'agent-alice', '--to', 'agent-bob', '--message', 'Concurrent message 2', '--server', serverUrl, '--api-key', aliceApiKey, '--json']),
+      env.runCli('alice', ['send', '--agent-id', 'agent-alice', '--to', 'agent-bob', '--message', 'Concurrent message 3', '--server', serverUrl, '--api-key', aliceApiKey, '--json']),
+      env.runCli('alice', ['send', '--agent-id', 'agent-alice', '--to', 'agent-bob', '--message', 'Concurrent message 4', '--server', serverUrl, '--api-key', aliceApiKey, '--json']),
+      env.runCli('alice', ['send', '--agent-id', 'agent-alice', '--to', 'agent-bob', '--message', 'Concurrent message 5', '--server', serverUrl, '--api-key', aliceApiKey, '--json']),
+    ]);
+
+    for (const res of concurrentSends) {
+      expect(res.exitCode).toBe(0);
+    }
+
+    // 2. Bob polls and receives all 5 messages
+    const drainRes = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(drainRes.exitCode).toBe(0);
+    const drainData = JSON.parse(drainRes.stdout);
+    expect(drainData.messages.length).toBe(5);
+
+    const receivedSeqs = drainData.messages.map((m: any) => m.seq);
+    const uniqueSeqs = new Set(receivedSeqs);
+    // Ensure all 5 sequence numbers are unique and no file locking collision occurred
+    expect(uniqueSeqs.size).toBe(5);
+    for (const m of drainData.messages) {
+      expect(m.verified).toBe(true);
+      expect(m.status).toBe('verified');
+    }
+
+    // 3. Visibility of persistence failures:
+    // When AGENT_LINK_STATE_DIR points to an invalid/unwriteable path, CLI fails visibly
+    const failWriteRes = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--to',
+      'agent-bob',
+      '--message',
+      'Should fail visibly on persistence error',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+    ], {
+      extraEnv: {
+        AGENT_LINK_STATE_DIR: '/dev/null/forbidden_state_dir',
+      },
+    });
+    expect(failWriteRes.exitCode).not.toBe(0);
+    expect(failWriteRes.stderr + failWriteRes.stdout).toMatch(/(failed|Error|denied|Not a directory)/i);
+  });
 });
