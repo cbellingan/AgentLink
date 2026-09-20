@@ -843,8 +843,8 @@ export class TuiRenderer {
       lines.push(`│${lineEnc}│`);
     }
 
-    // 3. Bottom Row: Decrypted flow using Human Key (Full Width)
-    lines.push(formatBorderWithTitle('├', '\x1b[1;34m💬 Decrypted Flow using Human Key (Link Telemetry & Conversation Flow)\x1b[0m', '┤', W));
+    // 3. Bottom Row: Decrypted flow at agent endpoints (Full Width)
+    lines.push(formatBorderWithTitle('├', '\x1b[1;34m💬 Link Telemetry & Conversation Flow (Decrypted at Agent Endpoints)\x1b[0m', '┤', W));
     const contentRowsBot = botH - 2;
     const logsDec = this.manager.logs.decrypted.slice(-contentRowsBot);
     for (let r = 0; r < contentRowsBot; r++) {
