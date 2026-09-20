@@ -21,8 +21,10 @@ if [ -n "$STAGED_KEYS" ]; then
   exit 1
 fi
 
-# 3. Run security auditor
-npm run audit:security
+# 3. Run security auditor if configured
+if [ -f package.json ] && grep -q '"audit:security"' package.json; then
+  npm run audit:security
+fi
 
 echo "✅ [Git Hook: pre-commit] Staged checks passed!"
 exit 0

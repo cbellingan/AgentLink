@@ -1484,9 +1484,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
       }
       if (req.method === "POST" && parsedUrl === "/api/links/request") {
         readJson((body) => {
-          const token = this.extractToken(req);
-          const human = this.getAuthenticatedHuman(req);
-          const apiKeyRecord = token ? this.resolveApiKey(token) : null;
+          const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+          if (!human && !apiKey) {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to initiate link requests" });
+            return;
+          }
           const agentAId = body.agentAId || body.fromAgentId;
           const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
           if (!agentAId || !agentBId) {
@@ -1497,6 +1499,16 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 400, { error: "invalid_agents", message: "Cannot link an agent to itself" });
             return;
           }
+          const agentA = this.agents.get(agentAId);
+          const agentB = this.agents.get(agentBId);
+          if (!isAdmin) {
+            const ownsA = agentA ? agentA.ownerHumanId === ownerHumanId : true;
+            const ownsB = agentB ? agentB.ownerHumanId === ownerHumanId : false;
+            if (agentA && agentB && !ownsA && !ownsB) {
+              this.sendJson(res, 403, { error: "forbidden", message: "Caller does not own either participant agent" });
+              return;
+            }
+          }
           const existing = Array.from(this.links.values()).find(
             (l) => l.agentAId === agentAId && l.agentBId === agentBId || l.agentAId === agentBId && l.agentBId === agentAId
           );
@@ -1504,10 +1516,8 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 200, { status: "ok", linkId: existing.id, link: existing, existing: true });
             return;
           }
-          const agentA = this.agents.get(agentAId);
-          const agentB = this.agents.get(agentBId);
-          const initiatorHumanId = body.initiatorHumanId || agentA?.ownerHumanId || (human ? human.id : apiKeyRecord ? apiKeyRecord.ownerHumanId : "human_admin");
-          const responderHumanId = body.responderHumanId || agentB?.ownerHumanId || initiatorHumanId;
+          const initiatorHumanId = isAdmin && body.initiatorHumanId ? body.initiatorHumanId : agentA?.ownerHumanId || ownerHumanId || "human_admin";
+          const responderHumanId = isAdmin && body.responderHumanId ? body.responderHumanId : agentB?.ownerHumanId || initiatorHumanId;
           let initiatorHumanEmail = body.initiatorHumanEmail || (human ? human.email : null);
           let responderHumanEmail = body.responderHumanEmail;
           for (const session of this.humanSessions.values()) {
@@ -1673,9 +1683,21 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
             return;
           }
-          const human = this.getAuthenticatedHuman(req);
-          let approverId = human?.id || body.approverHumanId || body.humanId || link.initiatorHumanId;
+          const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+          if (!human && !apiKey) {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to approve link" });
+            return;
+          }
+          let approverId = isAdmin && (body.approverHumanId || body.humanId) ? body.approverHumanId || body.humanId : ownerHumanId || (human ? human.id : null);
           if (approverId === "human_carl") approverId = "human_admin";
+          if (!approverId) {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Valid approver identity required" });
+            return;
+          }
+          if (!isAdmin && approverId !== link.initiatorHumanId && approverId !== link.responderHumanId) {
+            this.sendJson(res, 403, { error: "forbidden", message: "Caller is not authorized to approve this link" });
+            return;
+          }
           if (!link.approvals) {
             link.approvals = {};
           }
@@ -1781,6 +1803,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 404, { error: "link_not_found", message: `Link '${linkId}' not found` });
             return;
           }
+          const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+          if (!human && !apiKey) {
+            this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to send messages" });
+            return;
+          }
           if (link.status !== "active") {
             this.sendJson(res, 403, {
               error: "link_not_approved",
@@ -1794,6 +1821,13 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             this.sendJson(res, 403, {
               error: "forbidden_participant",
               message: `Agent '${senderId}' is not an authorized participant of link '${link.id}'.`
+            });
+            return;
+          }
+          if (!isAdmin && !this.isAgentOwnedBy(senderId, ownerHumanId)) {
+            this.sendJson(res, 403, {
+              error: "forbidden",
+              message: `Caller is not authorized to send as agent '${senderId}'.`
             });
             return;
           }

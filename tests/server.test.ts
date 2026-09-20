@@ -190,7 +190,7 @@ describe('AgentLink Server Test Suite', () => {
     // 1. Establish link
     const linkRes = await fetch(`${baseUrl}/api/links/request`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       body: JSON.stringify({ agentAId: 'antigravity', agentBId: 'ted-agent' }),
     }).then(r => r.json());
 
@@ -200,14 +200,14 @@ describe('AgentLink Server Test Suite', () => {
     // Approve link
     await fetch(`${baseUrl}/api/links/${linkId}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       body: JSON.stringify({}),
     });
 
     // 2. Dispatch a message into conversation
     const msgRes = await fetch(`${baseUrl}/api/links/${linkId}/message`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       body: JSON.stringify({ senderId: 'antigravity', payload: 'Hello Ted from the UI!' }),
     }).then(r => r.json());
 

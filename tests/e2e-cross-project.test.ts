@@ -214,7 +214,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
     // 1. Establish an approved Link between Alice and Bob
     const linkRes = await fetch(`${baseUrl}/api/links/request`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       body: JSON.stringify({
         agentAId: 'agent-alice',
         agentBId: 'agent-bob',
@@ -226,7 +226,7 @@ describe('Cross-Project End-to-End Integration Suite (AgentLink Server + agent-l
 
     const approveRes = await fetch(`${baseUrl}/api/links/${linkId}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       body: JSON.stringify({ peerVerification: 'optical_qr_verified' }),
     }).then(r => r.json());
     expect(approveRes.status).toBe('ok');

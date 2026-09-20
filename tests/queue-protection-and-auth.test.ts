@@ -133,7 +133,7 @@ describe('Queue Protection & Read Endpoint Authorization Security Suite', () => 
     for (let i = 1; i <= 3; i++) {
       const sendRes = await fetch(`${baseUrl}/api/links/${linkId}/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKeyBeta}` },
         body: JSON.stringify({
           senderId: 'agent-beta',
           payload: { data: `secret_payload_${i}`, sig: `sig_${i}`, seq: i },

@@ -97,13 +97,13 @@ describe('Broader Multi-Agent Mesh Topology & Security Failure Modes', () => {
     for (const [a, b, linkKey] of pairs) {
       const linkRes = await fetch(`${baseUrl}/api/links/request`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
         body: JSON.stringify({ agentAId: a, agentBId: b }),
       }).then(r => r.json());
       const lId = linkRes.linkId;
       await fetch(`${baseUrl}/api/links/${lId}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
         body: JSON.stringify({ peerVerification: 'optical_qr_verified' }),
       });
       links[linkKey] = lId;

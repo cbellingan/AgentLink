@@ -246,7 +246,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
       agentBId: 'agent-bob',
       initiatorHumanId: adminId,
       responderHumanId: wifeId,
-    });
+    }, adminToken);
     expect(linkReqRes.status).toBe(200);
     const link = linkReqRes.data.link;
     linkId = link.id;
@@ -262,7 +262,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     const sendRes = await apiPost(`/api/links/${linkId}/send`, {
       senderId: 'agent-alice',
       payload: { data: 'ciphertext_unapproved_1', sig: 'sig1', seq: 1 },
-    });
+    }, adminApiKey);
     expect(sendRes.status).toBe(403);
     expect(sendRes.data.error).toBe('link_not_approved');
     expect(sendRes.data.message).toContain('pending_approval');
@@ -296,7 +296,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     const sendRes = await apiPost(`/api/links/${linkId}/send`, {
       senderId: 'agent-alice',
       payload: { data: 'ciphertext_unapproved_2', sig: 'sig2', seq: 1 },
-    });
+    }, adminApiKey);
     expect(sendRes.status).toBe(403);
     expect(sendRes.data.error).toBe('link_not_approved');
   });
@@ -314,7 +314,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     const sendRes = await apiPost(`/api/links/${linkId}/send`, {
       senderId: 'agent-alice',
       payload: { data: 'e2ee_ciphertext_approved_secret', sig: 'sig_valid', seq: 1 },
-    });
+    }, adminApiKey);
     expect(sendRes.status).toBe(200);
     expect(sendRes.data.status).toBe('ok');
 
@@ -332,7 +332,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
       const res = await apiPost(`/api/links/${linkId}/send`, {
         senderId: 'agent-alice',
         payload: { data: `secret_msg_${i}`, sig: `sig_${i}`, seq: i },
-      });
+      }, adminApiKey);
       expect(res.status).toBe(200);
     }
 
@@ -352,7 +352,7 @@ describe('Cross-Account Agent Mapping, Secure Email Invites, Dual-Approval & Zer
     const injectRes = await apiPost(`/api/links/${linkId}/send`, {
       senderId: 'agent-charlie',
       payload: { data: 'malicious_injected_noise', sig: 'fake_sig', seq: 1 },
-    });
+    }, adminApiKey);
     expect(injectRes.status).toBe(403);
     expect(injectRes.data.error).toBe('forbidden_participant');
     expect(injectRes.data.message).toContain('not an authorized participant');
