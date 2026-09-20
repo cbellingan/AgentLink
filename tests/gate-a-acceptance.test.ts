@@ -1143,4 +1143,157 @@ describe('Milestone 3: Gate A E2E Acceptance Catalogue (E2E-006 to E2E-028)', ()
     expect(failWriteRes.exitCode).not.toBe(0);
     expect(failWriteRes.stderr + failWriteRes.stdout).toMatch(/(failed|Error|denied|Not a directory)/i);
   });
+
+  it('E2E-027: Versioned request/response schemas and consistent error codes (GET /api/schemas & /api/v1/schemas)', async () => {
+    for (const endpoint of ['/api/schemas', '/api/v1/schemas']) {
+      const res = await fetch(`${serverUrl}${endpoint}`);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.version).toBe('1.0.0');
+      expect(data.errorCodes).toBeDefined();
+      expect(data.errorCodes.unauthorized.httpStatus).toBe(401);
+      expect(data.errorCodes.forbidden.httpStatus).toBe(403);
+      expect(data.errorCodes.forbidden_participant.httpStatus).toBe(403);
+      expect(data.errorCodes.link_not_approved.httpStatus).toBe(403);
+      expect(data.errorCodes.link_not_found.httpStatus).toBe(404);
+      expect(data.errorCodes.agent_not_found.httpStatus).toBe(404);
+      expect(data.errorCodes.bad_request.httpStatus).toBe(400);
+      expect(data.schemas).toBeDefined();
+      expect(data.schemas.AgentRegistrationRequest).toBeDefined();
+      expect(data.schemas.LinkRequestPayload).toBeDefined();
+      expect(data.schemas.LinkMessagePayload).toBeDefined();
+      expect(data.schemas.ErrorResponse).toBeDefined();
+    }
+  });
+
+  it('E2E-028: Onboarding prompt generation includes deployment --server URLs and avoids secret embedding', async () => {
+    const prompt = server.generateAgentPrompt({
+      myAgentId: 'agent-remote',
+      peerAgentId: 'agent-local',
+      safetyNumber: '777-888',
+      portalUrl: 'https://hub.example.org:8443',
+    });
+
+    expect(prompt).toContain('--server "https://hub.example.org:8443"');
+    expect(prompt).toContain('python3 -m agent_link.cli connect --agent-id "agent-remote" --server "https://hub.example.org:8443" --once');
+    expect(prompt).toContain('python3 -m agent_link.cli links --agent-id "agent-remote" --server "https://hub.example.org:8443" --json');
+    expect(prompt).toContain('python3 -m agent_link.cli send --agent-id "agent-remote" --server "https://hub.example.org:8443" --to "agent-local"');
+    expect(prompt).toContain('python3 -m agent_link.cli receive --agent-id "agent-remote" --server "https://hub.example.org:8443" --once');
+    // Ensure no secrets are embedded directly in commands
+    expect(prompt).not.toMatch(/--api-key\s+sec_/);
+    expect(prompt).toContain('export AGENTLINK_API_KEY="<YOUR_API_KEY>"');
+  });
+
+  it('E2E-029: Operator messages cannot masquerade as cryptographically verified agent envelopes', async () => {
+    // 1. Human operator sends message via dashboard /api/links/:linkId/send
+    const opSendRes = await fetch(`${serverUrl}/api/links/${aliceBobLinkId}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h1Token}`,
+      },
+      body: JSON.stringify({
+        senderId: 'agent-alice',
+        payload: 'Attention: Operator alert dispatched from dashboard',
+        senderType: 'operator',
+      }),
+    });
+    expect(opSendRes.status).toBe(200);
+
+    // 2. Bob polls and decrypts messages
+    const bobRecv = await env.runCli('bob', [
+      'receive',
+      '--agent-id',
+      'agent-bob',
+      '--server',
+      serverUrl,
+      '--api-key',
+      bobApiKey,
+      '--once',
+      '--json',
+      '--decrypt',
+    ]);
+    expect(bobRecv.exitCode).toBe(0);
+    const data = JSON.parse(bobRecv.stdout);
+    expect(data.messages.length).toBeGreaterThan(0);
+
+    const opMsg = data.messages.find((m: any) => m.senderType === 'operator');
+    expect(opMsg).toBeDefined();
+    // Must be flagged as operator_notice, verified MUST be false
+    expect(opMsg.status).toBe('operator_notice');
+    expect(opMsg.verified).toBe(false);
+    expect(opMsg.operatorEmail).toBe(TEST_H1_EMAIL);
+    expect(opMsg.plaintext).toBe('Attention: Operator alert dispatched from dashboard');
+  });
+
+  it('E2E-030: Disambiguate peer selection when multiple active links exist', async () => {
+    // 1. Establish second active link for Alice: Alice <-> Ava
+    const reqLinkRes = await fetch(`${serverUrl}/api/links/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h1Token}`,
+      },
+      body: JSON.stringify({
+        agentAId: 'agent-alice',
+        agentBId: 'agent-ava',
+        note: 'Alice and Ava secondary link',
+      }),
+    });
+    expect(reqLinkRes.status).toBe(200);
+    const reqData = await reqLinkRes.json();
+    const newAliceAvaLinkId = reqData.link.id;
+
+    // Approve the new link
+    const approveRes = await fetch(`${serverUrl}/api/links/${newAliceAvaLinkId}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${h1Token}`,
+      },
+      body: JSON.stringify({ peerVerification: 'human_approved' }),
+    });
+    expect(approveRes.status).toBe(200);
+
+    // 2. Alice attempts to send a message without specifying --to or --link-id
+    const ambiguousSend = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--message',
+      'Ambiguous destination message',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+      '--json',
+    ]);
+    // CLI must refuse to guess and exit with non-zero
+    expect(ambiguousSend.exitCode).not.toBe(0);
+    const out = ambiguousSend.stdout + ambiguousSend.stderr;
+    expect(out).toMatch(/Multiple active links exist/i);
+    expect(out).toContain('agent-bob');
+    expect(out).toContain('agent-ava');
+
+    // 3. Alice passes --link-id pointing to aliceBobLinkId without specifying --to
+    const resolvedSend = await env.runCli('alice', [
+      'send',
+      '--agent-id',
+      'agent-alice',
+      '--link-id',
+      aliceBobLinkId,
+      '--message',
+      'Disambiguated via explicit link ID',
+      '--server',
+      serverUrl,
+      '--api-key',
+      aliceApiKey,
+      '--json',
+    ]);
+    expect(resolvedSend.exitCode).toBe(0);
+    const resolvedData = JSON.parse(resolvedSend.stdout);
+    expect(resolvedData.status).toBe('ok');
+    expect(resolvedData.targetPeer).toBe('agent-bob');
+  });
 });
+

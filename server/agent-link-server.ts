@@ -333,16 +333,16 @@ Instructions for your Agent:
 1. Review technical & security specification:
    ${onboardingUrl}
 2. Initialize local cryptographic identity and connect:
-   python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --once
+   python3 -m agent_link.cli connect --agent-id "${opts.myAgentId}" --server "${portal}" --once
 3. Check approved link status with '${opts.peerAgentId}':
-   python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --json
+   python3 -m agent_link.cli links --agent-id "${opts.myAgentId}" --server "${portal}" --json
 4. Send an end-to-end encrypted message once link is approved:
-   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
+   python3 -m agent_link.cli send --agent-id "${opts.myAgentId}" --server "${portal}" --to "${opts.peerAgentId}" --message "Hello from ${opts.myAgentId}" --json
 5. Receive messages / listen for replies:
    # Single-shot check:
-   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --once --json
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --server "${portal}" --once --json
    # Or continuous inbox listener daemon:
-   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --watch --inbox ~/.agent-link/inbox.jsonl`;
+   python3 -m agent_link.cli receive --agent-id "${opts.myAgentId}" --server "${portal}" --watch --inbox ~/.agent-link/inbox.jsonl`;
   }
 
   private discoverLocalAgents(): void {
@@ -776,6 +776,100 @@ Instructions for your Agent:
         this.sendJson(res, 200, { status: 'ok', content: text });
         return;
       }
+    }
+
+    // 1c. Versioned Schemas & Error Codes (Feature 6.1)
+    if (req.method === 'GET' && (parsedUrl === '/api/schemas' || parsedUrl === '/api/v1/schemas')) {
+      this.sendJson(res, 200, {
+        version: '1.0.0',
+        title: `${this.brandName} API Schema Registry`,
+        description: 'Versioned request/response schemas and standardized error codes for AgentLink zero-knowledge relay',
+        errorCodes: {
+          unauthorized: {
+            httpStatus: 401,
+            description: 'Authentication required (missing or invalid credentials)',
+          },
+          forbidden: {
+            httpStatus: 403,
+            description: 'Caller is not authorized to perform the operation on the requested resource',
+          },
+          forbidden_participant: {
+            httpStatus: 403,
+            description: 'Agent is not an authorized participant of the specified link',
+          },
+          link_not_approved: {
+            httpStatus: 403,
+            description: 'Link has not been approved by all required human controllers',
+          },
+          link_not_found: {
+            httpStatus: 404,
+            description: 'Specified link ID does not exist',
+          },
+          agent_not_found: {
+            httpStatus: 404,
+            description: 'Specified agent ID is not registered',
+          },
+          bad_request: {
+            httpStatus: 400,
+            description: 'Request payload failed validation or required fields were missing',
+          },
+          method_not_allowed: {
+            httpStatus: 405,
+            description: 'HTTP method not supported for endpoint',
+          },
+        },
+        schemas: {
+          ErrorResponse: {
+            type: 'object',
+            required: ['error', 'message'],
+            properties: {
+              error: { type: 'string' },
+              message: { type: 'string' },
+            },
+          },
+          ServerInfoResponse: {
+            type: 'object',
+            required: ['name', 'version', 'portalUrl', 'brandName'],
+            properties: {
+              name: { type: 'string' },
+              version: { type: 'string' },
+              adminConfigured: { type: 'boolean' },
+              port: { type: 'number' },
+              portalUrl: { type: 'string' },
+              brandName: { type: 'string' },
+            },
+          },
+          AgentRegistrationRequest: {
+            type: 'object',
+            required: ['id', 'signPub', 'encPub'],
+            properties: {
+              id: { type: 'string', pattern: '^[a-zA-Z0-9_-]{2,64}$' },
+              signPub: { type: 'string' },
+              encPub: { type: 'string' },
+              kid: { type: 'string' },
+            },
+          },
+          LinkRequestPayload: {
+            type: 'object',
+            required: ['myAgentId', 'peerAgentId'],
+            properties: {
+              myAgentId: { type: 'string' },
+              peerAgentId: { type: 'string' },
+              note: { type: 'string' },
+            },
+          },
+          LinkMessagePayload: {
+            type: 'object',
+            required: ['senderId', 'payload'],
+            properties: {
+              senderId: { type: 'string' },
+              senderType: { type: 'string', enum: ['agent', 'operator'] },
+              payload: { type: ['string', 'object'] },
+            },
+          },
+        },
+      });
+      return;
     }
 
     // 1b. Public Auth Configuration
@@ -1763,7 +1857,7 @@ Instructions for your Agent:
           return;
         }
 
-        const agentAId = body.agentAId || body.fromAgentId;
+        const agentAId = body.agentAId || body.fromAgentId || body.myAgentId;
         const agentBId = body.agentBId || body.peerAgentId || body.peerId || body.toAgentId;
 
         if (!agentAId || !agentBId) {
@@ -2207,6 +2301,9 @@ Instructions for your Agent:
             }
             link.lastActivityAt = new Date().toISOString();
 
+            const isOperator = Boolean(human && !apiKey) || body.senderType === 'operator';
+            const operatorEmail = isOperator ? (human?.email || 'operator') : undefined;
+
             if (!link.recentMessages) link.recentMessages = [];
             const previewText = typeof body.payload === 'string' 
               ? body.payload 
@@ -2221,21 +2318,27 @@ Instructions for your Agent:
               isSigned,
               seq,
               payload: body.payload,
+              senderType: isOperator ? 'operator' : 'agent',
+              operatorEmail,
             });
             if (link.recentMessages.length > 100) link.recentMessages.shift();
             this.saveState();
             this.notifySupervisors({ type: 'message_sent', linkId, senderId, targetId, seq });
           }
 
+          const isOperator = Boolean(human && !apiKey) || body.senderType === 'operator';
+          const operatorEmail = isOperator ? (human?.email || 'operator') : undefined;
           const senderAgent = this.agents.get(senderId);
           const q = this.messageQueues.get(targetId) || [];
           this.messageQueues.set(targetId, q);
           q.push({
             linkId,
             senderId,
-            senderEncPub: senderAgent?.encPub,
-            senderSignPub: senderAgent?.signPub,
-            senderKid: senderAgent?.kid,
+            senderType: isOperator ? 'operator' : 'agent',
+            operatorEmail,
+            senderEncPub: isOperator ? undefined : senderAgent?.encPub,
+            senderSignPub: isOperator ? undefined : senderAgent?.signPub,
+            senderKid: isOperator ? undefined : senderAgent?.kid,
             payload: body.payload,
             timestamp: new Date().toISOString(),
           });

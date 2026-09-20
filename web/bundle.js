@@ -2953,9 +2953,9 @@ Verification & Safety Anchors:
 - Purpose: ${link.note || "Cross-agent collaboration"}
 
 Instructions for your Agent:
-1. Confirm identity: python3 -m agent_link.cli whoami --agent-id "${link.agentBId}"
+1. Confirm identity: python3 -m agent_link.cli whoami --agent-id "${link.agentBId}" --server "${portal}"
 2. Report Safety Number (${link.safetyNumber || "482-915"}) to human operator.
-3. Check link status: python3 -m agent_link.cli links --agent-id "${link.agentBId}" --json`;
+3. Check link status: python3 -m agent_link.cli links --agent-id "${link.agentBId}" --server "${portal}" --json`;
   modal.classList.remove("hidden");
 };
 window.showAgentPrompt = (inviteId) => {
@@ -3024,7 +3024,7 @@ formSendMessage?.addEventListener("submit", async (e) => {
     const res = await apiRequest(`/api/links/${encodeURIComponent(linkId)}/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ senderId, payload: text })
+      body: JSON.stringify({ senderId, payload: text, senderType: "operator" })
     });
     if (res.status === "ok") {
       sendMessageModal.classList.add("hidden");
@@ -3129,7 +3129,11 @@ async function refreshConversationFlow(linkId, autoScroll = true) {
               <span class="badge" style="background: rgba(255,255,255,0.06); color: var(--text-secondary); font-size: 9px; padding: 1px 5px; font-family: var(--font-mono);">
                 \u{1F4E6} ${payloadSizeFormatted}
               </span>
-              ${m.isEncrypted ? `
+              ${m.senderType === "operator" ? `
+                <span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-size: 9px; padding: 1px 5px; font-weight: 600;">
+                  \u{1F464} Operator Dispatch${m.operatorEmail ? ` (${escapeHtml(m.operatorEmail)})` : ""}
+                </span>
+              ` : m.isEncrypted ? `
                 <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 9px; padding: 1px 5px; font-weight: 600;">
                   \u{1F512} ${m.isSigned ? "E2EE Signed (v2)" : "E2EE Frame"}
                 </span>
@@ -3170,7 +3174,7 @@ formConvoSend?.addEventListener("submit", async (e) => {
     const res = await apiRequest(`/api/links/${encodeURIComponent(currentConvoLinkId)}/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ senderId, payload: text })
+      body: JSON.stringify({ senderId, payload: text, senderType: "operator" })
     });
     if (res.status === "ok") {
       await refreshConversationFlow(currentConvoLinkId, true);

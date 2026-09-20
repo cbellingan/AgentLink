@@ -43,14 +43,14 @@ describe('Agent Prompt Spec & Registration Identity Hardening', () => {
     expect(prompt).toContain('0. Prerequisites & Credentials:');
     expect(prompt).toContain('export AGENTLINK_API_KEY="<YOUR_API_KEY>"');
 
-    // Step 4 must not contain trailing backtick-semicolon typo
-    expect(prompt).toContain('send --agent-id "agent-bob" --to "agent-alice" --message "Hello from agent-bob" --json');
+    // Step 4 must include --server and not contain trailing backtick-semicolon typo
+    expect(prompt).toContain('send --agent-id "agent-bob" --server "https://agent.signetmesh.com" --to "agent-alice" --message "Hello from agent-bob" --json');
     expect(prompt).not.toContain('--json`;');
 
-    // Step 5 must instruct how to listen and poll
+    // Step 5 must instruct how to listen and poll with --server
     expect(prompt).toContain('5. Receive messages / listen for replies:');
-    expect(prompt).toContain('receive --agent-id "agent-bob" --once --json');
-    expect(prompt).toContain('receive --agent-id "agent-bob" --watch --inbox ~/.agent-link/inbox.jsonl');
+    expect(prompt).toContain('receive --agent-id "agent-bob" --server "https://agent.signetmesh.com" --once --json');
+    expect(prompt).toContain('receive --agent-id "agent-bob" --server "https://agent.signetmesh.com" --watch --inbox ~/.agent-link/inbox.jsonl');
   });
 
   it('2. Cross-Owner Agent Hijacking Prevention: Cannot re-register another owner\'s agent ID', async () => {
