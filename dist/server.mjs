@@ -1302,7 +1302,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         readJson((body) => {
           const token = this.extractToken(req);
           const apiKeyRecord = token ? this.resolveApiKey(token) : null;
-          const humanSession = token ? this.humanSessions.get(token) : null;
+          const humanSession = token ? this.resolveHumanSession(token) : null;
           const isAdmin = Boolean(humanSession && humanSession.role === "admin");
           const isTestBypassKey = process.env.NODE_ENV === "test" && token === "sec_apk_valid_12345";
           if (!apiKeyRecord && !isAdmin && !isTestBypassKey) {
@@ -1930,6 +1930,12 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         }
         const existed = this.links.delete(linkId);
         if (existed) {
+          for (const [agentId, queue] of this.messageQueues.entries()) {
+            const remaining = queue.filter((msg) => msg.linkId !== linkId);
+            if (remaining.length !== queue.length) {
+              this.messageQueues.set(agentId, remaining);
+            }
+          }
           this.saveState();
           this.notifySupervisors({ type: "link_revoked", linkId });
         }
@@ -2343,7 +2349,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         const msg = JSON.parse(data.toString());
         if (msg.type === "register_supervisor") {
           const token = typeof msg.token === "string" ? msg.token.trim() : null;
-          const user = token ? this.humanSessions.get(token) : null;
+          const user = token ? this.resolveHumanSession(token) : null;
           if (!user) {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({
@@ -2476,10 +2482,20 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     this.humanSessions.set(token, user);
     return token;
   }
+  resolveHumanSession(token) {
+    if (!token) return null;
+    const session = this.humanSessions.get(token);
+    if (!session) return null;
+    if (session.expiresAt && session.expiresAt < Date.now()) {
+      this.humanSessions.delete(token);
+      return null;
+    }
+    return session;
+  }
   getAuthenticatedHuman(req) {
     const token = this.extractToken(req);
     if (!token) return null;
-    return this.humanSessions.get(token) || null;
+    return this.resolveHumanSession(token);
   }
   touchApiKey(apiKey) {
     apiKey.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
