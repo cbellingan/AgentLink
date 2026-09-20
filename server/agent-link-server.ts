@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { HumanUser, ApiKeyRecord, AgentRecord, KeyRotationEntry, LinkRecord, LinkMetrics, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
+import { MessageSpool, SpoolMessageEntry } from './message-spool.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -29,8 +30,9 @@ export class AgentLinkServer {
   public agents: Map<string, AgentRecord> = new Map(); // agentId -> record
   private links: Map<string, LinkRecord> = new Map(); // linkId -> record
   private invites: Map<string, InviteRecord> = new Map(); // inviteId/token -> record
-  private messageQueues: Map<string, Array<any>> = new Map(); // agentId -> pending messages
-  private pollWaiters: Map<string, Array<(msgs: any[]) => boolean>> = new Map(); // agentId -> resolvers
+  public messageSpool: MessageSpool;
+  public messageQueues: Map<string, Array<any>> = new Map(); // legacy in-memory cache
+  private pollWaiters: Map<string, Array<(data: { messages: any[]; leaseId: string; leaseExpiresAt: number }) => boolean>> = new Map(); // agentId -> resolvers
   private accessLogs: AccessLogEntry[] = [];
   private clientLogs: ClientLogEntry[] = [];
   private bugReports: BugReportRecord[] = [];
@@ -77,6 +79,11 @@ export class AgentLinkServer {
     if (!fs.existsSync(bugDir)) {
       fs.mkdirSync(bugDir, { recursive: true });
     }
+
+    const spoolPath = process.env.SPOOL_PATH
+      ? path.resolve(process.env.SPOOL_PATH)
+      : path.join(stateDir, 'messages-spool.json');
+    this.messageSpool = new MessageSpool({ spoolFilePath: spoolPath });
 
     this.loadState();
     this.loadBugReports();
@@ -226,9 +233,7 @@ export class AgentLinkServer {
     const totalB = link.totalBytes || (bA + bB);
     const avg = total > 0 ? Math.round(totalB / total) : 0;
 
-    const queueA = (this.messageQueues.get(link.agentAId) || []).filter(m => m.linkId === link.id).length;
-    const queueB = (this.messageQueues.get(link.agentBId) || []).filter(m => m.linkId === link.id).length;
-    const pending = queueA + queueB;
+    const pending = (this.messageSpool ? (this.messageSpool.getAvailableCount(link.agentAId, link.id) + this.messageSpool.getAvailableCount(link.agentBId, link.id)) : 0);
 
     const failed = link.framesFailed || 0;
     const delivered = link.framesDelivered !== undefined 
@@ -750,10 +755,21 @@ Instructions for your Agent:
 
       req.on('end', () => {
         if (aborted) return;
+        let parsed;
         try {
-          callback(data ? JSON.parse(data) : {});
+          parsed = data ? JSON.parse(data) : {};
         } catch {
           this.sendJson(res, 400, { error: 'invalid_json', message: 'Malformed JSON payload' });
+          return;
+        }
+        try {
+          callback(parsed);
+        } catch (err: any) {
+          console.error('[ROUTE HANDLER ERROR]', err);
+          if (!res.headersSent) {
+            const statusCode = err.statusCode || 500;
+            this.sendJson(res, statusCode, { error: err.code || 'internal_error', message: err.message });
+          }
         }
       });
     };
@@ -1101,6 +1117,7 @@ Instructions for your Agent:
           this.apiKeys.clear();
           this.agents.clear();
           this.links.clear();
+          this.messageSpool.clear();
           this.messageQueues.clear();
           this.pollWaiters.clear();
 
@@ -1133,6 +1150,7 @@ Instructions for your Agent:
           for (const [agentId] of Array.from(this.agents.entries())) {
             if (isTestIdentifier(agentId)) {
               this.agents.delete(agentId);
+              this.messageSpool.purgeForAgent(agentId);
               this.messageQueues.delete(agentId);
               this.pollWaiters.delete(agentId);
               removedAgentIds.add(agentId);
@@ -1741,6 +1759,7 @@ Instructions for your Agent:
         return;
       }
       const existed = this.agents.delete(agentId);
+      this.messageSpool.purgeForAgent(agentId);
       this.messageQueues.delete(agentId);
       this.pollWaiters.delete(agentId);
 
@@ -1802,19 +1821,26 @@ Instructions for your Agent:
         }
       }
 
-      const q = this.messageQueues.get(agentId) || [];
-      if (q.length > 0) {
-        const msgs = [...q];
-        q.length = 0;
-        for (const msg of msgs) {
+      const leaseResult = this.messageSpool.lease(agentId, 50);
+      if (leaseResult.messages.length > 0) {
+        for (const msg of leaseResult.messages) {
           if (msg.linkId && this.links.has(msg.linkId)) {
             const l = this.links.get(msg.linkId)!;
             l.framesDelivered = (l.framesDelivered || 0) + 1;
             l.lastDeliveredAt = new Date().toISOString();
           }
         }
+        const q = this.messageQueues.get(agentId);
+        if (q) {
+          const leasedIds = new Set(leaseResult.messages.map(m => m.msgId));
+          this.messageQueues.set(agentId, q.filter(m => !leasedIds.has(m.msgId)));
+        }
         this.saveState();
-        this.sendJson(res, 200, { messages: msgs });
+        this.sendJson(res, 200, {
+          messages: leaseResult.messages,
+          leaseId: leaseResult.leaseId,
+          leaseExpiresAt: leaseResult.leaseExpiresAt,
+        });
         return;
       }
 
@@ -1826,13 +1852,13 @@ Instructions for your Agent:
       }
 
       let active = true;
-      const resolver = (msgs: any[]): boolean => {
+      const resolver = (leaseData: { messages: any[]; leaseId: string; leaseExpiresAt: number }): boolean => {
         if (!active) return false;
         active = false;
         clearTimeout(timer);
         const idx = waiters!.indexOf(resolver);
         if (idx !== -1) waiters!.splice(idx, 1);
-        for (const msg of msgs) {
+        for (const msg of leaseData.messages) {
           if (msg.linkId && this.links.has(msg.linkId)) {
             const l = this.links.get(msg.linkId)!;
             l.framesDelivered = (l.framesDelivered || 0) + 1;
@@ -1840,7 +1866,11 @@ Instructions for your Agent:
           }
         }
         this.saveState();
-        this.sendJson(res, 200, { messages: msgs });
+        this.sendJson(res, 200, {
+          messages: leaseData.messages,
+          leaseId: leaseData.leaseId,
+          leaseExpiresAt: leaseData.leaseExpiresAt,
+        });
         return true;
       };
 
@@ -1849,7 +1879,7 @@ Instructions for your Agent:
         active = false;
         const idx = waiters!.indexOf(resolver);
         if (idx !== -1) waiters!.splice(idx, 1);
-        this.sendJson(res, 200, { messages: [] });
+        this.sendJson(res, 200, { messages: [], leaseId: '', leaseExpiresAt: 0 });
       }, timeoutMs);
 
       req.on('close', () => {
@@ -1861,6 +1891,69 @@ Instructions for your Agent:
       });
 
       waiters.push(resolver);
+      return;
+    }
+
+    // 8.1 Message Acknowledgement Endpoint (Explicit Recipient Ack)
+    if (req.method === 'POST' && parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/ack')) {
+      const parts = parsedUrl.split('/');
+      const agentId = parts[3];
+
+      const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+      if (!human && !apiKey && !isAdmin) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required to acknowledge messages' });
+        return;
+      }
+
+      readJson((body) => {
+        const messageIds: string[] = Array.isArray(body.messageIds) ? body.messageIds : (body.msgId ? [body.msgId] : []);
+        const leaseId: string | undefined = body.leaseId;
+
+        if (messageIds.length === 0) {
+          this.sendJson(res, 400, { error: 'invalid_request', message: 'messageIds array or msgId required' });
+          return;
+        }
+
+        const ackResult = this.messageSpool.ack(agentId, messageIds, leaseId);
+        this.saveState();
+
+        this.sendJson(res, 200, {
+          status: 'ok',
+          acknowledged: ackResult.acknowledged,
+          count: ackResult.acknowledged.length,
+          notFound: ackResult.notFound,
+        });
+      });
+      return;
+    }
+
+    // 8.2 Message Nack / Requeue / Reject Endpoint
+    if (req.method === 'POST' && parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/nack')) {
+      const parts = parsedUrl.split('/');
+      const agentId = parts[3];
+
+      const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+      if (!human && !apiKey && !isAdmin) {
+        this.sendJson(res, 401, { error: 'unauthorized', message: 'Authentication required to nack messages' });
+        return;
+      }
+
+      readJson((body) => {
+        const messageIds: string[] = Array.isArray(body.messageIds) ? body.messageIds : (body.msgId ? [body.msgId] : []);
+        const action: 'requeue' | 'reject' = body.action === 'reject' ? 'reject' : 'requeue';
+
+        if (messageIds.length === 0) {
+          this.sendJson(res, 400, { error: 'invalid_request', message: 'messageIds array or msgId required' });
+          return;
+        }
+
+        const nackResult = this.messageSpool.nack(agentId, messageIds, action);
+        this.sendJson(res, 200, {
+          status: 'ok',
+          nacked: nackResult.nacked,
+          action,
+        });
+      });
       return;
     }
 
@@ -2238,7 +2331,8 @@ Instructions for your Agent:
 
       const existed = this.links.delete(linkId);
       if (existed) {
-        // Feature 8.2: Immediately destroy all in-flight frames buffered for the revoked link
+        // Feature 8.2 & 9.6: Immediately destroy all in-flight frames buffered for the revoked link
+        this.messageSpool.purgeForLink(linkId);
         for (const [agentId, queue] of this.messageQueues.entries()) {
           const remaining = queue.filter(msg => msg.linkId !== linkId);
           if (remaining.length !== queue.length) {
@@ -2299,12 +2393,12 @@ Instructions for your Agent:
 
         const targetId = senderId === link.agentAId ? link.agentBId : link.agentAId;
 
+        const isEnc = typeof body.payload === 'object' && body.payload !== null && Boolean(body.payload.data);
+        const isSigned = isEnc && Boolean(body.payload.sig);
+        const seq = isEnc && typeof body.payload.seq === 'number' ? body.payload.seq : undefined;
+
         if (targetId) {
           if (link) {
-            const isEnc = typeof body.payload === 'object' && body.payload !== null && Boolean(body.payload.data);
-            const isSigned = isEnc && Boolean(body.payload.sig);
-            const seq = isEnc && typeof body.payload.seq === 'number' ? body.payload.seq : undefined;
-
             const payloadStr = typeof body.payload === 'string' ? body.payload : JSON.stringify(body.payload ?? '');
             const payloadBytes = Buffer.byteLength(payloadStr, 'utf8');
 
@@ -2352,9 +2446,40 @@ Instructions for your Agent:
           const isOperator = Boolean(human && !apiKey) || body.senderType === 'operator';
           const operatorEmail = isOperator ? (human?.email || 'operator') : undefined;
           const senderAgent = this.agents.get(senderId);
+
+          // Feature 9: Stable client-generated message ID & durable spooling before acceptance
+          const clientMsgId = body.msgId || (typeof body.payload === 'object' && body.payload !== null ? body.payload.msgId : undefined);
+
+          let spoolResult;
+          try {
+            spoolResult = this.messageSpool.enqueue({
+              msgId: clientMsgId,
+              linkId,
+              senderId,
+              targetId,
+              senderType: isOperator ? 'operator' : 'agent',
+              operatorEmail,
+              senderEncPub: isOperator ? undefined : senderAgent?.encPub,
+              senderSignPub: isOperator ? undefined : senderAgent?.signPub,
+              senderKid: isOperator ? undefined : senderAgent?.kid,
+              payload: body.payload,
+            });
+          } catch (spoolErr: any) {
+            const status = spoolErr.statusCode || 500;
+            this.sendJson(res, status, {
+              error: spoolErr.code || 'spool_error',
+              message: spoolErr.message,
+              retryAfter: spoolErr.retryAfter,
+            });
+            return;
+          }
+
+          const spooledMsg = spoolResult.message;
+
           const q = this.messageQueues.get(targetId) || [];
           this.messageQueues.set(targetId, q);
           q.push({
+            msgId: spooledMsg.msgId,
             linkId,
             senderId,
             senderType: isOperator ? 'operator' : 'agent',
@@ -2363,28 +2488,40 @@ Instructions for your Agent:
             senderSignPub: isOperator ? undefined : senderAgent?.signPub,
             senderKid: isOperator ? undefined : senderAgent?.kid,
             payload: body.payload,
-            timestamp: new Date().toISOString(),
+            timestamp: spooledMsg.enqueuedAt,
           });
 
+          // Wake any active long-poll waiters with a lease
           const waiters = this.pollWaiters.get(targetId) || [];
-          while (waiters.length > 0 && q.length > 0) {
-            const resolver = waiters[0];
-            const msgs = [...q];
-            q.length = 0;
-            const delivered = resolver(msgs);
-            if (!delivered) {
-              q.unshift(...msgs);
-            } else {
-              if (link) {
-                link.framesDelivered = (link.framesDelivered || 0) + msgs.filter(m => m.linkId === link.id).length;
-                link.lastDeliveredAt = new Date().toISOString();
-                this.saveState();
+          if (waiters.length > 0) {
+            const leaseData = this.messageSpool.lease(targetId, 50);
+            if (leaseData.messages.length > 0) {
+              const resolver = waiters.shift();
+              if (resolver) {
+                const targetQ = this.messageQueues.get(targetId);
+                if (targetQ) {
+                  const leasedIds = new Set(leaseData.messages.map(m => m.msgId));
+                  this.messageQueues.set(targetId, targetQ.filter(m => !leasedIds.has(m.msgId)));
+                }
+                resolver(leaseData);
               }
             }
           }
+
+          this.sendJson(res, 200, {
+            status: 'ok',
+            state: 'accepted',
+            accepted: true,
+            delivered: false,
+            msgId: spooledMsg.msgId,
+            linkId,
+            seq,
+            duplicate: spoolResult.isDuplicate,
+          });
+          return;
         }
 
-        this.sendJson(res, 200, { status: 'ok', delivered: Boolean(targetId) });
+        this.sendJson(res, 200, { status: 'ok', state: 'accepted', accepted: true, delivered: false });
       });
       return;
     }

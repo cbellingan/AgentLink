@@ -1,10 +1,348 @@
 // server/agent-link-server.ts
 import http from "node:http";
+import fs2 from "node:fs";
+import path2 from "node:path";
+import crypto2 from "node:crypto";
+import os from "node:os";
+import { WebSocketServer, WebSocket } from "ws";
+
+// server/message-spool.ts
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import os from "node:os";
-import { WebSocketServer, WebSocket } from "ws";
+var MessageSpool = class {
+  spoolFilePath;
+  maxQueueDepth;
+  maxQueueBytes;
+  defaultLeaseDurationMs;
+  retentionMs;
+  messagesByMsgId = /* @__PURE__ */ new Map();
+  recipientQueues = /* @__PURE__ */ new Map();
+  // targetId -> Array<msgId>
+  acknowledgedMsgIds = /* @__PURE__ */ new Map();
+  constructor(options = {}) {
+    this.spoolFilePath = options.spoolFilePath || path.resolve(process.cwd(), "messages-spool.json");
+    this.maxQueueDepth = options.maxQueueDepth || 1e3;
+    this.maxQueueBytes = options.maxQueueBytes || 10 * 1024 * 1024;
+    this.defaultLeaseDurationMs = options.defaultLeaseDurationMs || 3e4;
+    this.retentionMs = options.retentionMs || 7 * 24 * 60 * 60 * 1e3;
+    this.load();
+  }
+  hashPayload(payload) {
+    const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+    return crypto.createHash("sha256").update(raw).digest("hex");
+  }
+  enqueue(input) {
+    const msgId = input.msgId && input.msgId.trim() ? input.msgId.trim() : `msg_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+    const payloadHash = this.hashPayload(input.payload);
+    const existing = this.messagesByMsgId.get(msgId);
+    if (existing) {
+      if (existing.payloadHash === payloadHash && existing.targetId === input.targetId) {
+        return { isDuplicate: true, message: existing };
+      }
+      const err = new Error(`Conflicting msgId reuse with different payload or target: ${msgId}`);
+      err.statusCode = 409;
+      err.code = "idempotency_conflict";
+      throw err;
+    }
+    const acked = this.acknowledgedMsgIds.get(msgId);
+    if (acked) {
+      if (acked.payloadHash === payloadHash && acked.targetId === input.targetId) {
+        return {
+          isDuplicate: true,
+          message: {
+            msgId,
+            linkId: input.linkId,
+            senderId: input.senderId,
+            targetId: input.targetId,
+            senderType: input.senderType || "agent",
+            operatorEmail: input.operatorEmail,
+            payload: input.payload,
+            payloadHash,
+            state: "acknowledged",
+            enqueuedAt: new Date(acked.timestamp).toISOString(),
+            attempts: 1,
+            acknowledgedAt: new Date(acked.timestamp).toISOString()
+          }
+        };
+      }
+      const err = new Error(`Conflicting msgId reuse with different payload (already acknowledged): ${msgId}`);
+      err.statusCode = 409;
+      err.code = "idempotency_conflict";
+      throw err;
+    }
+    const queue = this.recipientQueues.get(input.targetId) || [];
+    const activeMsgIds = queue.filter((id) => {
+      const m = this.messagesByMsgId.get(id);
+      return m && (m.state === "available" || m.state === "in_flight");
+    });
+    if (activeMsgIds.length >= this.maxQueueDepth) {
+      const err = new Error(`Recipient queue depth limit exceeded (${this.maxQueueDepth} messages)`);
+      err.statusCode = 429;
+      err.code = "queue_full";
+      err.retryAfter = 10;
+      throw err;
+    }
+    let currentBytes = 0;
+    for (const id of activeMsgIds) {
+      const m = this.messagesByMsgId.get(id);
+      if (m) {
+        currentBytes += JSON.stringify(m.payload).length;
+      }
+    }
+    const incomingBytes = JSON.stringify(input.payload).length;
+    if (currentBytes + incomingBytes > this.maxQueueBytes) {
+      const err = new Error(`Recipient queue byte limit exceeded (${this.maxQueueBytes} bytes)`);
+      err.statusCode = 429;
+      err.code = "queue_full";
+      err.retryAfter = 10;
+      throw err;
+    }
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const entry = {
+      msgId,
+      linkId: input.linkId,
+      senderId: input.senderId,
+      targetId: input.targetId,
+      senderType: input.senderType || "agent",
+      operatorEmail: input.operatorEmail,
+      senderEncPub: input.senderEncPub,
+      senderSignPub: input.senderSignPub,
+      senderKid: input.senderKid,
+      payload: input.payload,
+      payloadHash,
+      state: "available",
+      enqueuedAt: nowIso,
+      timestamp: nowIso,
+      attempts: 0
+    };
+    this.messagesByMsgId.set(msgId, entry);
+    if (!this.recipientQueues.has(input.targetId)) {
+      this.recipientQueues.set(input.targetId, []);
+    }
+    this.recipientQueues.get(input.targetId).push(msgId);
+    this.persist();
+    return { isDuplicate: false, message: entry };
+  }
+  lease(recipientId, limit = 50, durationMs) {
+    const now = Date.now();
+    const leaseDuration = durationMs || this.defaultLeaseDurationMs;
+    const queue = this.recipientQueues.get(recipientId) || [];
+    for (const id of queue) {
+      const m = this.messagesByMsgId.get(id);
+      if (!m) continue;
+      if (m.state === "in_flight" && m.leaseExpiresAt && m.leaseExpiresAt <= now) {
+        m.state = "available";
+        m.leaseId = void 0;
+        m.leaseExpiresAt = void 0;
+      }
+      if (m.state === "available") {
+        const ageMs = now - Date.parse(m.enqueuedAt);
+        if (ageMs > this.retentionMs) {
+          m.state = "expired";
+        }
+      }
+    }
+    const available = queue.map((id) => this.messagesByMsgId.get(id)).filter((m) => !!m && m.state === "available");
+    if (available.length === 0) {
+      return { leaseId: "", messages: [], leaseExpiresAt: 0 };
+    }
+    const picked = available.slice(0, limit);
+    const leaseId = `lease_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
+    const leaseExpiresAt = now + leaseDuration;
+    for (const msg of picked) {
+      msg.state = "in_flight";
+      msg.leaseId = leaseId;
+      msg.leaseExpiresAt = leaseExpiresAt;
+      msg.attempts += 1;
+    }
+    this.persist();
+    return {
+      leaseId,
+      messages: picked,
+      leaseExpiresAt
+    };
+  }
+  ack(recipientId, messageIds, leaseId) {
+    const acknowledged = [];
+    const notFound = [];
+    const queue = this.recipientQueues.get(recipientId) || [];
+    for (const id of messageIds) {
+      const msg = this.messagesByMsgId.get(id);
+      if (msg && msg.targetId === recipientId && msg.state !== "revoked") {
+        msg.state = "acknowledged";
+        msg.acknowledgedAt = (/* @__PURE__ */ new Date()).toISOString();
+        acknowledged.push(id);
+        this.acknowledgedMsgIds.set(id, {
+          payloadHash: msg.payloadHash,
+          targetId: msg.targetId,
+          timestamp: Date.now()
+        });
+        const qIdx = queue.indexOf(id);
+        if (qIdx !== -1) queue.splice(qIdx, 1);
+        this.messagesByMsgId.delete(id);
+      } else if (this.acknowledgedMsgIds.has(id)) {
+        acknowledged.push(id);
+      } else {
+        notFound.push(id);
+      }
+    }
+    if (this.acknowledgedMsgIds.size > 1e4) {
+      const keys = Array.from(this.acknowledgedMsgIds.keys());
+      for (let i = 0; i < 2e3; i++) {
+        this.acknowledgedMsgIds.delete(keys[i]);
+      }
+    }
+    this.persist();
+    return { acknowledged, notFound };
+  }
+  nack(recipientId, messageIds, action = "requeue") {
+    const nacked = [];
+    const queue = this.recipientQueues.get(recipientId) || [];
+    for (const id of messageIds) {
+      const msg = this.messagesByMsgId.get(id);
+      if (msg && msg.targetId === recipientId && msg.state === "in_flight") {
+        if (action === "reject") {
+          msg.state = "rejected";
+          const qIdx = queue.indexOf(id);
+          if (qIdx !== -1) queue.splice(qIdx, 1);
+          this.messagesByMsgId.delete(id);
+        } else {
+          msg.state = "available";
+          msg.leaseId = void 0;
+          msg.leaseExpiresAt = void 0;
+        }
+        nacked.push(id);
+      }
+    }
+    this.persist();
+    return { nacked };
+  }
+  purgeForLink(linkId) {
+    let count = 0;
+    for (const [id, msg] of this.messagesByMsgId.entries()) {
+      if (msg.linkId === linkId && msg.state !== "acknowledged") {
+        msg.state = "revoked";
+        const q = this.recipientQueues.get(msg.targetId);
+        if (q) {
+          const idx = q.indexOf(id);
+          if (idx !== -1) q.splice(idx, 1);
+        }
+        this.messagesByMsgId.delete(id);
+        count++;
+      }
+    }
+    if (count > 0) this.persist();
+    return count;
+  }
+  purgeForAgent(agentId) {
+    let count = 0;
+    for (const [id, msg] of this.messagesByMsgId.entries()) {
+      if ((msg.targetId === agentId || msg.senderId === agentId) && msg.state !== "acknowledged") {
+        msg.state = "revoked";
+        const q = this.recipientQueues.get(msg.targetId);
+        if (q) {
+          const idx = q.indexOf(id);
+          if (idx !== -1) q.splice(idx, 1);
+        }
+        this.messagesByMsgId.delete(id);
+        count++;
+      }
+    }
+    this.recipientQueues.delete(agentId);
+    if (count > 0) this.persist();
+    return count;
+  }
+  getPendingCount(linkId) {
+    let count = 0;
+    for (const msg of this.messagesByMsgId.values()) {
+      if (linkId && msg.linkId !== linkId) continue;
+      if (msg.state === "available" || msg.state === "in_flight") {
+        count++;
+      }
+    }
+    return count;
+  }
+  getAvailableCount(targetId, linkId) {
+    const queue = this.recipientQueues.get(targetId) || [];
+    let count = 0;
+    const now = Date.now();
+    for (const id of queue) {
+      const m = this.messagesByMsgId.get(id);
+      if (!m) continue;
+      if (linkId && m.linkId !== linkId) continue;
+      const isAvailable = m.state === "available" || m.state === "in_flight" && m.leaseExpiresAt && m.leaseExpiresAt <= now;
+      if (isAvailable) count++;
+    }
+    return count;
+  }
+  getQueue(targetId) {
+    const queue = this.recipientQueues.get(targetId) || [];
+    return queue.map((id) => this.messagesByMsgId.get(id)).filter((m) => !!m);
+  }
+  clear() {
+    this.messagesByMsgId.clear();
+    this.recipientQueues.clear();
+    this.acknowledgedMsgIds.clear();
+    this.persist();
+  }
+  persist() {
+    try {
+      const dataDir = path.dirname(this.spoolFilePath);
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const serialized = {
+        version: 1,
+        savedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        messages: Array.from(this.messagesByMsgId.values()),
+        recipientQueues: Array.from(this.recipientQueues.entries()),
+        acknowledgedMsgIds: Array.from(this.acknowledgedMsgIds.entries())
+      };
+      const tmpPath = `${this.spoolFilePath}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(serialized, null, 2), "utf8");
+      fs.renameSync(tmpPath, this.spoolFilePath);
+    } catch (err) {
+      console.error(`[MessageSpool Error] Failed to persist spool to ${this.spoolFilePath}:`, err.message);
+    }
+  }
+  load() {
+    if (!fs.existsSync(this.spoolFilePath)) {
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(this.spoolFilePath, "utf8");
+      const data = JSON.parse(raw);
+      this.messagesByMsgId.clear();
+      this.recipientQueues.clear();
+      this.acknowledgedMsgIds.clear();
+      if (Array.isArray(data.messages)) {
+        for (const m of data.messages) {
+          if (m.state === "in_flight") {
+            m.state = "available";
+            m.leaseId = void 0;
+            m.leaseExpiresAt = void 0;
+          }
+          this.messagesByMsgId.set(m.msgId, m);
+        }
+      }
+      if (Array.isArray(data.recipientQueues)) {
+        for (const [recipientId, q] of data.recipientQueues) {
+          this.recipientQueues.set(recipientId, q);
+        }
+      }
+      if (Array.isArray(data.acknowledgedMsgIds)) {
+        for (const [id, val] of data.acknowledgedMsgIds) {
+          this.acknowledgedMsgIds.set(id, val);
+        }
+      }
+    } catch (err) {
+      console.warn(`[MessageSpool Warning] Failed to load spool from ${this.spoolFilePath}:`, err.message);
+    }
+  }
+};
+
+// server/agent-link-server.ts
 var AgentLinkServer = class {
   port;
   staticPath;
@@ -27,8 +365,9 @@ var AgentLinkServer = class {
   // linkId -> record
   invites = /* @__PURE__ */ new Map();
   // inviteId/token -> record
+  messageSpool;
   messageQueues = /* @__PURE__ */ new Map();
-  // agentId -> pending messages
+  // legacy in-memory cache
   pollWaiters = /* @__PURE__ */ new Map();
   // agentId -> resolvers
   accessLogs = [];
@@ -43,35 +382,37 @@ var AgentLinkServer = class {
   lastKeySaveTime = 0;
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
-    this.staticPath = staticPath2 || path.resolve("web");
-    this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto.createHash("sha256").update((process.env.ADMIN_EMAIL || "admin@test.local").toLowerCase()).digest("hex");
+    this.staticPath = staticPath2 || path2.resolve("web");
+    this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto2.createHash("sha256").update((process.env.ADMIN_EMAIL || "admin@test.local").toLowerCase()).digest("hex");
     const defaultHashes = [
       this.adminEmailHash
     ];
     const envHashes = (process.env.AUTHORIZED_EMAIL_HASHES || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
     this.authorizedEmailHashes = /* @__PURE__ */ new Set([...defaultHashes, ...envHashes]);
     if (process.env.DATA_PATH) {
-      this.stateFilePath = path.resolve(process.env.DATA_PATH);
+      this.stateFilePath = path2.resolve(process.env.DATA_PATH);
     } else if (process.env.NODE_ENV === "production" || this.port === 3e3) {
-      this.stateFilePath = path.resolve(".data/prod/agent-link-state.json");
+      this.stateFilePath = path2.resolve(".data/prod/agent-link-state.json");
     } else {
-      this.stateFilePath = path.resolve(".data/dev/agent-link-state.json");
+      this.stateFilePath = path2.resolve(".data/dev/agent-link-state.json");
     }
-    const stateDir = path.dirname(this.stateFilePath);
-    if (!fs.existsSync(stateDir)) {
-      fs.mkdirSync(stateDir, { recursive: true });
+    const stateDir = path2.dirname(this.stateFilePath);
+    if (!fs2.existsSync(stateDir)) {
+      fs2.mkdirSync(stateDir, { recursive: true });
     }
     if (process.env.BUG_LOG_PATH) {
-      this.bugLogPath = path.resolve(process.env.BUG_LOG_PATH);
+      this.bugLogPath = path2.resolve(process.env.BUG_LOG_PATH);
     } else if (process.env.NODE_ENV === "test") {
-      this.bugLogPath = path.join(os.tmpdir(), `agentlink-test-bugs-${process.pid}.jsonl`);
+      this.bugLogPath = path2.join(os.tmpdir(), `agentlink-test-bugs-${process.pid}.jsonl`);
     } else {
-      this.bugLogPath = path.resolve(".data/bugs/bug-reports.jsonl");
+      this.bugLogPath = path2.resolve(".data/bugs/bug-reports.jsonl");
     }
-    const bugDir = path.dirname(this.bugLogPath);
-    if (!fs.existsSync(bugDir)) {
-      fs.mkdirSync(bugDir, { recursive: true });
+    const bugDir = path2.dirname(this.bugLogPath);
+    if (!fs2.existsSync(bugDir)) {
+      fs2.mkdirSync(bugDir, { recursive: true });
     }
+    const spoolPath = process.env.SPOOL_PATH ? path2.resolve(process.env.SPOOL_PATH) : path2.join(stateDir, "messages-spool.json");
+    this.messageSpool = new MessageSpool({ spoolFilePath: spoolPath });
     this.loadState();
     this.loadBugReports();
     if (process.env.AGENTLINK_MIGRATE_LEGACY === "true") {
@@ -80,8 +421,8 @@ var AgentLinkServer = class {
   }
   loadBugReports() {
     try {
-      if (fs.existsSync(this.bugLogPath)) {
-        const raw = fs.readFileSync(this.bugLogPath, "utf8");
+      if (fs2.existsSync(this.bugLogPath)) {
+        const raw = fs2.readFileSync(this.bugLogPath, "utf8");
         const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
         this.bugReports = lines.map((l) => {
           try {
@@ -115,8 +456,8 @@ var AgentLinkServer = class {
   }
   loadState() {
     try {
-      if (fs.existsSync(this.stateFilePath)) {
-        const raw = fs.readFileSync(this.stateFilePath, "utf8");
+      if (fs2.existsSync(this.stateFilePath)) {
+        const raw = fs2.readFileSync(this.stateFilePath, "utf8");
         const parsed = JSON.parse(raw);
         if (parsed.apiKeys) {
           for (const [k, v] of Object.entries(parsed.apiKeys)) {
@@ -181,9 +522,9 @@ var AgentLinkServer = class {
   }
   saveState() {
     try {
-      const dir = path.dirname(this.stateFilePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      const dir = path2.dirname(this.stateFilePath);
+      if (!fs2.existsSync(dir)) {
+        fs2.mkdirSync(dir, { recursive: true });
       }
       const data = {
         apiKeys: Object.fromEntries(this.apiKeys.entries()),
@@ -191,13 +532,13 @@ var AgentLinkServer = class {
         links: Object.fromEntries(this.links.entries()),
         invites: Object.fromEntries(Array.from(this.invites.entries()).filter(([k]) => k.startsWith("inv_")))
       };
-      fs.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), "utf8");
+      fs2.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), "utf8");
     } catch (e) {
       console.warn("[AgentLink Server] Could not save state to disk:", e);
     }
   }
   calculateSafetyNumber(keyA, keyB) {
-    const hash = crypto.createHash("sha256").update([keyA, keyB].sort().join("::")).digest();
+    const hash = crypto2.createHash("sha256").update([keyA, keyB].sort().join("::")).digest();
     const num = hash.readUInt32BE(0) % 9e5 + 1e5;
     return `${String(num).slice(0, 3)}-${String(num).slice(3, 6)}`;
   }
@@ -209,9 +550,7 @@ var AgentLinkServer = class {
     const bB = link.bytesBtoA || 0;
     const totalB = link.totalBytes || bA + bB;
     const avg = total > 0 ? Math.round(totalB / total) : 0;
-    const queueA = (this.messageQueues.get(link.agentAId) || []).filter((m) => m.linkId === link.id).length;
-    const queueB = (this.messageQueues.get(link.agentBId) || []).filter((m) => m.linkId === link.id).length;
-    const pending = queueA + queueB;
+    const pending = this.messageSpool ? this.messageSpool.getAvailableCount(link.agentAId, link.id) + this.messageSpool.getAvailableCount(link.agentBId, link.id) : 0;
     const failed = link.framesFailed || 0;
     const delivered = link.framesDelivered !== void 0 ? link.framesDelivered : Math.max(0, total - pending - failed);
     let reliabilityPercent = 100;
@@ -327,14 +666,14 @@ Instructions for your Agent:
     }
     try {
       const homeDir = os.homedir();
-      const keyDir = path.join(homeDir, ".agent-link");
-      if (fs.existsSync(keyDir)) {
-        const files = fs.readdirSync(keyDir);
+      const keyDir = path2.join(homeDir, ".agent-link");
+      if (fs2.existsSync(keyDir)) {
+        const files = fs2.readdirSync(keyDir);
         for (const file of files) {
           if (file.endsWith("-keys.json") || file === "keys.json") {
             try {
-              const fullPath = path.join(keyDir, file);
-              const content = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+              const fullPath = path2.join(keyDir, file);
+              const content = JSON.parse(fs2.readFileSync(fullPath, "utf8"));
               const agentId = content.agentId || (file === "keys.json" ? "agent" : file.replace("-keys.json", ""));
               const lowerAgentId = agentId.toLowerCase();
               if (lowerAgentId.startsWith("test-") || lowerAgentId.includes("test") || lowerAgentId.startsWith("mesh-") || lowerAgentId === "agent" || lowerAgentId.includes("demo") || lowerAgentId.includes("temp")) {
@@ -385,7 +724,7 @@ Instructions for your Agent:
           initiatorHumanId: "human_admin",
           status: "active",
           createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
+          linkKey: `sec_link_${crypto2.randomBytes(16).toString("hex")}`,
           approvals: {},
           framesCount: 0,
           bytesAtoB: 0,
@@ -434,7 +773,7 @@ Instructions for your Agent:
           responderHumanEmail: responderEmail,
           status: "pending_approval",
           createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
+          linkKey: `sec_link_${crypto2.randomBytes(16).toString("hex")}`,
           approvals: {
             [initiatorHumanId]: false,
             [responderHumanId]: false
@@ -667,10 +1006,21 @@ Instructions for your Agent:
         });
         req.on("end", () => {
           if (aborted) return;
+          let parsed;
           try {
-            callback(data ? JSON.parse(data) : {});
+            parsed = data ? JSON.parse(data) : {};
           } catch {
             this.sendJson(res, 400, { error: "invalid_json", message: "Malformed JSON payload" });
+            return;
+          }
+          try {
+            callback(parsed);
+          } catch (err) {
+            console.error("[ROUTE HANDLER ERROR]", err);
+            if (!res.headersSent) {
+              const statusCode = err.statusCode || 500;
+              this.sendJson(res, statusCode, { error: err.code || "internal_error", message: err.message });
+            }
           }
         });
       };
@@ -689,9 +1039,9 @@ Instructions for your Agent:
         return;
       }
       if (req.method === "GET" && (parsedUrl === "/api/docs/encryption" || parsedUrl === "/docs/encryption.md")) {
-        const docPath = path.resolve("docs/encryption.md");
-        if (fs.existsSync(docPath)) {
-          const text = fs.readFileSync(docPath, "utf8");
+        const docPath = path2.resolve("docs/encryption.md");
+        if (fs2.existsSync(docPath)) {
+          const text = fs2.readFileSync(docPath, "utf8");
           if (parsedUrl.endsWith(".md")) {
             const buf = Buffer.from(text, "utf8");
             res.writeHead(200, {
@@ -859,7 +1209,7 @@ Instructions for your Agent:
               (inv) => inv.recipientEmail === email && (inv.status === "pending" || inv.status === "accepted")
             ) || null;
           }
-          const emailHash = crypto.createHash("sha256").update(email).digest("hex");
+          const emailHash = crypto2.createHash("sha256").update(email).digest("hex");
           const isAdmin = emailHash === this.adminEmailHash;
           const isAuthorized = this.authorizedEmailHashes.has(emailHash);
           if (!isAdmin && !isAuthorized && !matchingInvite) {
@@ -871,7 +1221,7 @@ Instructions for your Agent:
             return;
           }
           const userHumanId = isAdmin ? "human_admin" : `human_${emailHash.slice(0, 12)}`;
-          const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+          const token = `sec_hum_${crypto2.randomBytes(24).toString("hex")}`;
           const user = {
             id: userHumanId,
             name: name || (isAdmin ? "Administrator" : email.split("@")[0]),
@@ -893,7 +1243,7 @@ Instructions for your Agent:
         readJson((body) => {
           const email = (body.email || "").trim().toLowerCase();
           const password = (body.password || body.credential || "").trim();
-          const emailHash = email ? crypto.createHash("sha256").update(email).digest("hex") : null;
+          const emailHash = email ? crypto2.createHash("sha256").update(email).digest("hex") : null;
           if (email && emailHash !== this.adminEmailHash && !this.authorizedEmailHashes.has(emailHash)) {
             setSecurityNote(`LOGIN REJECTED: ${email} is not enabled`);
             this.sendJson(res, 403, {
@@ -919,7 +1269,7 @@ Instructions for your Agent:
           }
           const isAdmin = !email || emailHash === this.adminEmailHash;
           const userHumanId = isAdmin ? "human_admin" : `human_${emailHash.slice(0, 12)}`;
-          const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+          const token = `sec_hum_${crypto2.randomBytes(24).toString("hex")}`;
           const user = {
             id: userHumanId,
             name: isAdmin ? "Administrator" : email.split("@")[0],
@@ -980,6 +1330,7 @@ Instructions for your Agent:
             this.apiKeys.clear();
             this.agents.clear();
             this.links.clear();
+            this.messageSpool.clear();
             this.messageQueues.clear();
             this.pollWaiters.clear();
             const defaultKeyVal = "sec_apk_admin_fleet_primary";
@@ -1006,6 +1357,7 @@ Instructions for your Agent:
             for (const [agentId] of Array.from(this.agents.entries())) {
               if (isTestIdentifier(agentId)) {
                 this.agents.delete(agentId);
+                this.messageSpool.purgeForAgent(agentId);
                 this.messageQueues.delete(agentId);
                 this.pollWaiters.delete(agentId);
                 removedAgentIds.add(agentId);
@@ -1041,9 +1393,9 @@ Instructions for your Agent:
             this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required" });
             return;
           }
-          const keyVal = `sec_apk_${crypto.randomBytes(32).toString("hex")}`;
+          const keyVal = `sec_apk_${crypto2.randomBytes(32).toString("hex")}`;
           const keyRecord = {
-            id: `key_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+            id: `key_${Date.now()}_${crypto2.randomBytes(4).toString("hex")}`,
             key: keyVal,
             ownerHumanId: human.id,
             label: body.label || `Agent Key (${(/* @__PURE__ */ new Date()).toLocaleDateString()})`,
@@ -1159,8 +1511,8 @@ Instructions for your Agent:
               (l) => l.agentAId === fromAgentId && l.agentBId === targetAgentId || l.agentAId === targetAgentId && l.agentBId === fromAgentId
             );
             if (!existing) {
-              createdLinkId = `link_${crypto.randomBytes(6).toString("hex")}`;
-              const responderHumanId = agentB?.ownerHumanId || `human_${crypto.createHash("sha256").update(toEmail).digest("hex").slice(0, 12)}`;
+              createdLinkId = `link_${crypto2.randomBytes(6).toString("hex")}`;
+              const responderHumanId = agentB?.ownerHumanId || `human_${crypto2.createHash("sha256").update(toEmail).digest("hex").slice(0, 12)}`;
               const approvals = {};
               approvals[inviterHumanId] = false;
               if (responderHumanId !== inviterHumanId) {
@@ -1176,7 +1528,7 @@ Instructions for your Agent:
                 responderHumanEmail: toEmail,
                 status: "pending_approval",
                 createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-                linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
+                linkKey: `sec_link_${crypto2.randomBytes(16).toString("hex")}`,
                 approvals,
                 safetyNumber,
                 agentPrompt,
@@ -1190,8 +1542,8 @@ Instructions for your Agent:
               createdLinkId = existing.id;
             }
           }
-          const inviteId = `inv_${crypto.randomBytes(8).toString("hex")}`;
-          const inviteToken = `tok_${crypto.randomBytes(24).toString("base64url")}`;
+          const inviteId = `inv_${crypto2.randomBytes(8).toString("hex")}`;
+          const inviteToken = `tok_${crypto2.randomBytes(24).toString("base64url")}`;
           const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3).toISOString();
           const inviteRecord = {
             id: inviteId,
@@ -1317,7 +1669,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           if (apiKeyRecord) {
             apiKeyRecord.lastUsedAt = (/* @__PURE__ */ new Date()).toISOString();
           }
-          const agentId = body.id || body.agentId || `agent_${crypto.randomBytes(4).toString("hex")}`;
+          const agentId = body.id || body.agentId || `agent_${crypto2.randomBytes(4).toString("hex")}`;
           let ownerHumanId = "human_admin";
           if (apiKeyRecord && apiKeyRecord.ownerHumanId) {
             ownerHumanId = apiKeyRecord.ownerHumanId;
@@ -1348,13 +1700,13 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                     Buffer.from("302a300506032b6570032100", "hex"),
                     Buffer.from(existing.signPub, "base64")
                   ]);
-                  const prevKey = crypto.createPublicKey({
+                  const prevKey = crypto2.createPublicKey({
                     key: prevPubKeyDer,
                     format: "der",
                     type: "spki"
                   });
                   const sig = Buffer.from(body.rotationSignature, "base64");
-                  authorized = crypto.verify(null, msg, prevKey, sig);
+                  authorized = crypto2.verify(null, msg, prevKey, sig);
                   if (authorized) {
                     authType = "previous_key_signature";
                   }
@@ -1519,6 +1871,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           return;
         }
         const existed = this.agents.delete(agentId);
+        this.messageSpool.purgeForAgent(agentId);
         this.messageQueues.delete(agentId);
         this.pollWaiters.delete(agentId);
         let removedLinksCount = 0;
@@ -1566,19 +1919,26 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             timeoutMs = Math.min(t, 6e4);
           }
         }
-        const q = this.messageQueues.get(agentId) || [];
-        if (q.length > 0) {
-          const msgs = [...q];
-          q.length = 0;
-          for (const msg of msgs) {
+        const leaseResult = this.messageSpool.lease(agentId, 50);
+        if (leaseResult.messages.length > 0) {
+          for (const msg of leaseResult.messages) {
             if (msg.linkId && this.links.has(msg.linkId)) {
               const l = this.links.get(msg.linkId);
               l.framesDelivered = (l.framesDelivered || 0) + 1;
               l.lastDeliveredAt = (/* @__PURE__ */ new Date()).toISOString();
             }
           }
+          const q = this.messageQueues.get(agentId);
+          if (q) {
+            const leasedIds = new Set(leaseResult.messages.map((m) => m.msgId));
+            this.messageQueues.set(agentId, q.filter((m) => !leasedIds.has(m.msgId)));
+          }
           this.saveState();
-          this.sendJson(res, 200, { messages: msgs });
+          this.sendJson(res, 200, {
+            messages: leaseResult.messages,
+            leaseId: leaseResult.leaseId,
+            leaseExpiresAt: leaseResult.leaseExpiresAt
+          });
           return;
         }
         let waiters = this.pollWaiters.get(agentId);
@@ -1587,13 +1947,13 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           this.pollWaiters.set(agentId, waiters);
         }
         let active = true;
-        const resolver = (msgs) => {
+        const resolver = (leaseData) => {
           if (!active) return false;
           active = false;
           clearTimeout(timer);
           const idx = waiters.indexOf(resolver);
           if (idx !== -1) waiters.splice(idx, 1);
-          for (const msg of msgs) {
+          for (const msg of leaseData.messages) {
             if (msg.linkId && this.links.has(msg.linkId)) {
               const l = this.links.get(msg.linkId);
               l.framesDelivered = (l.framesDelivered || 0) + 1;
@@ -1601,7 +1961,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             }
           }
           this.saveState();
-          this.sendJson(res, 200, { messages: msgs });
+          this.sendJson(res, 200, {
+            messages: leaseData.messages,
+            leaseId: leaseData.leaseId,
+            leaseExpiresAt: leaseData.leaseExpiresAt
+          });
           return true;
         };
         const timer = setTimeout(() => {
@@ -1609,7 +1973,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           active = false;
           const idx = waiters.indexOf(resolver);
           if (idx !== -1) waiters.splice(idx, 1);
-          this.sendJson(res, 200, { messages: [] });
+          this.sendJson(res, 200, { messages: [], leaseId: "", leaseExpiresAt: 0 });
         }, timeoutMs);
         req.on("close", () => {
           if (!active) return;
@@ -1619,6 +1983,56 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
           if (idx !== -1) waiters.splice(idx, 1);
         });
         waiters.push(resolver);
+        return;
+      }
+      if (req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/ack")) {
+        const parts = parsedUrl.split("/");
+        const agentId = parts[3];
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey && !isAdmin) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to acknowledge messages" });
+          return;
+        }
+        readJson((body) => {
+          const messageIds = Array.isArray(body.messageIds) ? body.messageIds : body.msgId ? [body.msgId] : [];
+          const leaseId = body.leaseId;
+          if (messageIds.length === 0) {
+            this.sendJson(res, 400, { error: "invalid_request", message: "messageIds array or msgId required" });
+            return;
+          }
+          const ackResult = this.messageSpool.ack(agentId, messageIds, leaseId);
+          this.saveState();
+          this.sendJson(res, 200, {
+            status: "ok",
+            acknowledged: ackResult.acknowledged,
+            count: ackResult.acknowledged.length,
+            notFound: ackResult.notFound
+          });
+        });
+        return;
+      }
+      if (req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/nack")) {
+        const parts = parsedUrl.split("/");
+        const agentId = parts[3];
+        const { human, apiKey, ownerHumanId, isAdmin } = this.getAuthenticatedPrincipal(req);
+        if (!human && !apiKey && !isAdmin) {
+          this.sendJson(res, 401, { error: "unauthorized", message: "Authentication required to nack messages" });
+          return;
+        }
+        readJson((body) => {
+          const messageIds = Array.isArray(body.messageIds) ? body.messageIds : body.msgId ? [body.msgId] : [];
+          const action = body.action === "reject" ? "reject" : "requeue";
+          if (messageIds.length === 0) {
+            this.sendJson(res, 400, { error: "invalid_request", message: "messageIds array or msgId required" });
+            return;
+          }
+          const nackResult = this.messageSpool.nack(agentId, messageIds, action);
+          this.sendJson(res, 200, {
+            status: "ok",
+            nacked: nackResult.nacked,
+            action
+          });
+        });
         return;
       }
       if (req.method === "POST" && parsedUrl === "/api/links/request") {
@@ -1663,7 +2077,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             if (session.id === initiatorHumanId && !initiatorHumanEmail) initiatorHumanEmail = session.email;
             if (session.id === responderHumanId && !responderHumanEmail) responderHumanEmail = session.email;
           }
-          const linkId = `link_${crypto.randomBytes(6).toString("hex")}`;
+          const linkId = `link_${crypto2.randomBytes(6).toString("hex")}`;
           const isSameOwner = initiatorHumanId === responderHumanId;
           const approvals = {};
           approvals[initiatorHumanId] = false;
@@ -1690,7 +2104,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             responderHumanEmail,
             status: "pending_approval",
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            linkKey: `sec_link_${crypto.randomBytes(16).toString("hex")}`,
+            linkKey: `sec_link_${crypto2.randomBytes(16).toString("hex")}`,
             approvals,
             safetyNumber,
             agentPrompt,
@@ -1930,6 +2344,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         }
         const existed = this.links.delete(linkId);
         if (existed) {
+          this.messageSpool.purgeForLink(linkId);
           for (const [agentId, queue] of this.messageQueues.entries()) {
             const remaining = queue.filter((msg) => msg.linkId !== linkId);
             if (remaining.length !== queue.length) {
@@ -1980,11 +2395,11 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             return;
           }
           const targetId = senderId === link.agentAId ? link.agentBId : link.agentAId;
+          const isEnc = typeof body.payload === "object" && body.payload !== null && Boolean(body.payload.data);
+          const isSigned = isEnc && Boolean(body.payload.sig);
+          const seq = isEnc && typeof body.payload.seq === "number" ? body.payload.seq : void 0;
           if (targetId) {
             if (link) {
-              const isEnc = typeof body.payload === "object" && body.payload !== null && Boolean(body.payload.data);
-              const isSigned = isEnc && Boolean(body.payload.sig);
-              const seq = isEnc && typeof body.payload.seq === "number" ? body.payload.seq : void 0;
               const payloadStr = typeof body.payload === "string" ? body.payload : JSON.stringify(body.payload ?? "");
               const payloadBytes = Buffer.byteLength(payloadStr, "utf8");
               link.framesCount = (link.framesCount || 0) + 1;
@@ -2007,7 +2422,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               if (!link.recentMessages) link.recentMessages = [];
               const previewText = typeof body.payload === "string" ? body.payload : isEnc ? `[E2EE v${body.payload.v || 1}${seq ? ` #${seq}` : ""} ${body.payload.data.slice(0, 12)}...]` : "[E2EE Encrypted Payload]";
               link.recentMessages.push({
-                id: `msg_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+                id: `msg_${Date.now()}_${crypto2.randomBytes(3).toString("hex")}`,
                 timestamp: (/* @__PURE__ */ new Date()).toISOString(),
                 senderId,
                 targetId,
@@ -2026,9 +2441,35 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             const isOperator = Boolean(human && !apiKey) || body.senderType === "operator";
             const operatorEmail = isOperator ? human?.email || "operator" : void 0;
             const senderAgent = this.agents.get(senderId);
+            const clientMsgId = body.msgId || (typeof body.payload === "object" && body.payload !== null ? body.payload.msgId : void 0);
+            let spoolResult;
+            try {
+              spoolResult = this.messageSpool.enqueue({
+                msgId: clientMsgId,
+                linkId,
+                senderId,
+                targetId,
+                senderType: isOperator ? "operator" : "agent",
+                operatorEmail,
+                senderEncPub: isOperator ? void 0 : senderAgent?.encPub,
+                senderSignPub: isOperator ? void 0 : senderAgent?.signPub,
+                senderKid: isOperator ? void 0 : senderAgent?.kid,
+                payload: body.payload
+              });
+            } catch (spoolErr) {
+              const status = spoolErr.statusCode || 500;
+              this.sendJson(res, status, {
+                error: spoolErr.code || "spool_error",
+                message: spoolErr.message,
+                retryAfter: spoolErr.retryAfter
+              });
+              return;
+            }
+            const spooledMsg = spoolResult.message;
             const q = this.messageQueues.get(targetId) || [];
             this.messageQueues.set(targetId, q);
             q.push({
+              msgId: spooledMsg.msgId,
               linkId,
               senderId,
               senderType: isOperator ? "operator" : "agent",
@@ -2037,26 +2478,36 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               senderSignPub: isOperator ? void 0 : senderAgent?.signPub,
               senderKid: isOperator ? void 0 : senderAgent?.kid,
               payload: body.payload,
-              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              timestamp: spooledMsg.enqueuedAt
             });
             const waiters = this.pollWaiters.get(targetId) || [];
-            while (waiters.length > 0 && q.length > 0) {
-              const resolver = waiters[0];
-              const msgs = [...q];
-              q.length = 0;
-              const delivered = resolver(msgs);
-              if (!delivered) {
-                q.unshift(...msgs);
-              } else {
-                if (link) {
-                  link.framesDelivered = (link.framesDelivered || 0) + msgs.filter((m) => m.linkId === link.id).length;
-                  link.lastDeliveredAt = (/* @__PURE__ */ new Date()).toISOString();
-                  this.saveState();
+            if (waiters.length > 0) {
+              const leaseData = this.messageSpool.lease(targetId, 50);
+              if (leaseData.messages.length > 0) {
+                const resolver = waiters.shift();
+                if (resolver) {
+                  const targetQ = this.messageQueues.get(targetId);
+                  if (targetQ) {
+                    const leasedIds = new Set(leaseData.messages.map((m) => m.msgId));
+                    this.messageQueues.set(targetId, targetQ.filter((m) => !leasedIds.has(m.msgId)));
+                  }
+                  resolver(leaseData);
                 }
               }
             }
+            this.sendJson(res, 200, {
+              status: "ok",
+              state: "accepted",
+              accepted: true,
+              delivered: false,
+              msgId: spooledMsg.msgId,
+              linkId,
+              seq,
+              duplicate: spoolResult.isDuplicate
+            });
+            return;
           }
-          this.sendJson(res, 200, { status: "ok", delivered: Boolean(targetId) });
+          this.sendJson(res, 200, { status: "ok", state: "accepted", accepted: true, delivered: false });
         });
         return;
       }
@@ -2146,7 +2597,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               return;
             }
           }
-          const bugId = `bug_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+          const bugId = `bug_${Date.now()}_${crypto2.randomBytes(4).toString("hex")}`;
           const record = {
             id: bugId,
             agentId: rawAgentId || void 0,
@@ -2162,7 +2613,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             resolved: false
           };
           try {
-            fs.appendFileSync(this.bugLogPath, JSON.stringify(record) + "\n", "utf8");
+            fs2.appendFileSync(this.bugLogPath, JSON.stringify(record) + "\n", "utf8");
           } catch (err) {
             console.error("[BUG-LOG ERROR] Failed to append bug report:", err);
           }
@@ -2276,7 +2727,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             bug.resolutionNote = void 0;
           }
           try {
-            fs.writeFileSync(this.bugLogPath, this.bugReports.map((b) => JSON.stringify(b)).join("\n") + "\n", "utf8");
+            fs2.writeFileSync(this.bugLogPath, this.bugReports.map((b) => JSON.stringify(b)).join("\n") + "\n", "utf8");
           } catch (err) {
             console.error("[BUG-LOG ERROR] Failed to sync bug resolution:", err);
           }
@@ -2295,10 +2746,10 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
   serveStatic(req, res, parsedUrl) {
     if (parsedUrl.startsWith("/docs/")) {
       const relDoc = parsedUrl.replace(/^\/docs\//, "");
-      const docPath = path.join(path.resolve("docs"), relDoc);
-      if (fs.existsSync(docPath) && !fs.statSync(docPath).isDirectory()) {
+      const docPath = path2.join(path2.resolve("docs"), relDoc);
+      if (fs2.existsSync(docPath) && !fs2.statSync(docPath).isDirectory()) {
         try {
-          const content = fs.readFileSync(docPath);
+          const content = fs2.readFileSync(docPath);
           res.writeHead(200, {
             "Content-Type": "text/markdown; charset=utf-8",
             "Content-Length": content.length,
@@ -2310,15 +2761,15 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
         }
       }
     }
-    let filePath = path.join(this.staticPath, parsedUrl === "/" ? "index.html" : parsedUrl);
+    let filePath = path2.join(this.staticPath, parsedUrl === "/" ? "index.html" : parsedUrl);
     if (parsedUrl === "/onboarding" || parsedUrl === "/onboarding.md") {
-      filePath = path.join(this.staticPath, "onboarding.md");
+      filePath = path2.join(this.staticPath, "onboarding.md");
     } else if (parsedUrl === "/skill" || parsedUrl === "/skill.md") {
-      filePath = path.join(this.staticPath, "skill.md");
-    } else if (!fs.existsSync(filePath)) {
-      filePath = path.join(this.staticPath, "index.html");
+      filePath = path2.join(this.staticPath, "skill.md");
+    } else if (!fs2.existsSync(filePath)) {
+      filePath = path2.join(this.staticPath, "index.html");
     }
-    const ext = path.extname(filePath).toLowerCase();
+    const ext = path2.extname(filePath).toLowerCase();
     const mimeTypes = {
       ".html": "text/html; charset=utf-8",
       ".js": "application/javascript; charset=utf-8",
@@ -2330,7 +2781,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     };
     const contentType = mimeTypes[ext] || "application/octet-stream";
     try {
-      const content = fs.readFileSync(filePath);
+      const content = fs2.readFileSync(filePath);
       res.writeHead(200, {
         "Content-Type": contentType,
         "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -2478,7 +2929,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     return null;
   }
   createSession(user) {
-    const token = `sec_hum_${crypto.randomBytes(24).toString("hex")}`;
+    const token = `sec_hum_${crypto2.randomBytes(24).toString("hex")}`;
     this.humanSessions.set(token, user);
     return token;
   }
@@ -2542,10 +2993,10 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
 };
 
 // server/run.ts
-import path2 from "node:path";
+import path3 from "node:path";
 var defaultPort = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? 3001 : 3e3;
 var port = parseInt(process.env.PORT || String(defaultPort), 10);
-var staticPath = process.env.STATIC_PATH || path2.resolve("web");
+var staticPath = process.env.STATIC_PATH || path3.resolve("web");
 var server = new AgentLinkServer(port, staticPath);
 var bindHost = process.env.BIND_HOST || void 0;
 server.listen(bindHost).catch((err) => {

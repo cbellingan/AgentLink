@@ -41,8 +41,9 @@ To maintain an honest, rigorous threat model, AgentLink explicitly distinguishes
   - `sig`: Base64-encoded Ed25519 digital signature.
   - Byte length of the ciphertext.
 - **Delivery & Retention Semantics**:
-  - **Ephemeral In-Memory Buffering**: In current releases, the relay server buffers in-flight envelopes in an in-memory queue.
-  - **Polling Drain**: When a recipient agent polls its queue (`GET /api/agents/:id/poll`), pending envelopes are returned and removed from the relay's queue.
+  - **Durable Disk Spooling**: The relay buffers in-flight envelopes in an atomic crash-resilient disk spool (`messages-spool.json`), surviving server restarts and worker crashes.
+  - **Lease-Based Polling**: When a recipient agent polls its queue (`GET /api/agents/:id/poll`), the relay acquires a time-bounded lease (default 30 seconds) on available messages with a unique `leaseId`.
+  - **Receipt-Before-ACK Guarantee**: The recipient must persist or process received envelopes prior to issuing `POST /api/agents/:id/ack`. Expired leases automatically return messages to the queue for redelivery.
   - **Unilateral Revocation Purge**: If an operator or agent revokes a link (`DELETE /api/links/:id`), all in-flight envelopes buffered for that link are immediately purged.
 
 ---
@@ -131,7 +132,9 @@ All JSON API errors return standard RFC-compliant error structures:
 | `404` | `agent_not_found` | Specified agent identity is not registered on the relay |
 | `404` | `link_not_found` | Specified link identifier does not exist |
 | `405` | `method_not_allowed` | Requested HTTP method is not supported on this route |
+| `409` | `conflict` | Submission uses an existing `msgId` with conflicting payload, link, or sender |
 | `413` | `payload_too_large` | Request body exceeds configured limits (e.g., > 1MB) |
+| `429` | `queue_full` | Recipient message queue depth or byte limits exceeded (backpressure) |
 
 ---
 
@@ -166,3 +169,18 @@ The following test vectors are normative. Any conforming implementation (Node.js
   `v2:link_vector_test_001:alice:bob:1:1789254000:0123456789abcdef0123456789abcdef:ABEiM0RVZneImaq7:SQGoMyHE3tvmAZe7IxU0GaIuFQ+Q5AF4uiGmPk0Wd0M9h3WG7JyrrsYUq5xQkbS1ci3RexVUCaNx1zkx1+4=`
 - **Ed25519 Digital Signature (`sig`, base64)**:
   `zvNq4RJ93ifplEvtPUCxk9JUJxd0n1OQnQ4dTxn6yIpeI6+eUfzmEvRTLIP4Q0udwTS34vTQnuy7gqTcTGXfCA==`
+
+---
+
+## 7. Durable Delivery & Lease State Machine
+
+### 7.1 Delivery State Separation
+- `POST /api/links/:id/send`: Enqueues to durable spool and synchronously returns `{ "status": "ok", "state": "accepted", "accepted": true, "delivered": false, "msgId": "..." }`.
+- Delivery is completed asynchronously upon recipient explicit acknowledgement (`POST /api/agents/:id/ack`).
+
+### 7.2 Lease Protocol
+1. **Poll**: `GET /api/agents/:id/poll?timeout=ms` atomically leases unleased messages up to batch limit for 30 seconds, returning `{ "messages": [...], "leaseId": "lease_...", "leaseExpiresAt": 178... }`.
+2. **Commit**: `POST /api/agents/:id/ack` with `{ "messageIds": [...], "leaseId": "..." }` permanently commits receipt and purges entries from the spool.
+3. **NACK / Quarantine**: `POST /api/agents/:id/nack` with `{ "messageIds": [...], "action": "requeue" | "quarantine" }` safely handles malformed or poison envelopes.
+4. **Lease Timeout**: Unacknowledged leased messages whose lease timer expires automatically return to unleased status for redelivery.
+
