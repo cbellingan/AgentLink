@@ -7,6 +7,25 @@
 
 import { WebSocket } from 'ws';
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Attempt to load .env from current directory if present
+if (fs.existsSync('.env')) {
+  try {
+    const lines = fs.readFileSync('.env', 'utf8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim();
+        if (!process.env[key]) process.env[key] = val;
+      }
+    }
+  } catch {}
+}
 
 const target = (process.argv[2] || process.env.TARGET_URL || 'http://localhost:3000').replace(/\/$/, '');
 const wsTarget = `${target.replace(/^http/, 'ws')}/ws`;
@@ -107,7 +126,16 @@ async function run() {
   // 3. Authorized Human Authentication
   await testEndpoint('3. Authorized Human Authentication (Admin Gatekeeper)', async () => {
     let res;
-    if (process.env.ADMIN_EMAIL) {
+    if (process.env.ADMIN_PASSWORD) {
+      res = await safeFetch(`${target}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: process.env.ADMIN_EMAIL || '',
+          password: process.env.ADMIN_PASSWORD,
+        }),
+      });
+    } else if (process.env.ADMIN_EMAIL) {
       res = await safeFetch(`${target}/api/auth/google`, {
         method: 'POST',
         headers: {
@@ -121,7 +149,7 @@ async function run() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          password: process.env.ADMIN_PASSWORD || '',
+          password: '',
         }),
       });
     }
