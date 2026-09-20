@@ -22,9 +22,21 @@
         <button type="button" id="btnOpenAboutModal" class="btn btn-secondary btn-sm" style="font-size: 12px; gap: 6px;" data-testid="btn-open-about">
           ℹ️ Architecture & Security
         </button>
+        <div id="dataPlaneHealthBadge" class="badge badge-success" title="Autonomous Data Plane: Ready for local forwarding" style="font-size: 11px;" data-testid="data-plane-health-badge">⚡ Data Plane: Online</div>
         <div id="statusBadge" class="badge badge-success">Mesh Online</div>
       </div>
     </header>
+
+    <!-- Data Plane Degraded / Outage Alert Banner (Feature 11) -->
+    <div id="dataPlaneAlertBanner" style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: #fca5a5; display: none; align-items: center; justify-content: space-between;" data-testid="data-plane-alert-banner">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 16px;">🚨</span>
+        <div>
+          <strong>Data Plane Outage / Degraded:</strong> <span id="dataPlaneAlertMessage">Data Plane forwarding is unavailable. Outgoing message ingress and polling are impaired.</span>
+        </div>
+      </div>
+      <button type="button" id="btnRetryPlaneHealth" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;">Retry</button>
+    </div>
 
     <!-- 1. Landing Gate (Google Sign-In) -->
     <div id="landingCard" class="card" style="max-width: 440px; margin: 40px auto; text-align: center;" data-testid="landing-card">

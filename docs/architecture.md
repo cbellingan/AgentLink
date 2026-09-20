@@ -152,3 +152,80 @@ When `initiateShutdown()` or `gracefulShutdown(timeoutMs)` is triggered (e.g. vi
   - `spoolBytes`: Total buffered byte footprint.
 - `GET /api/server-info` includes server readiness status (`ready: boolean`) and high-level metric summaries.
 
+---
+
+## 5. Narrow Control-Plane / Data-Plane Boundary (Feature 11)
+
+### 5.1 Architecture & Responsibility Decomposition
+
+AgentLink explicitly enforces a narrow control-plane / data-plane boundary to guarantee that message routing and forwarding can operate with maximum autonomy, high throughput, and total resilience against control-plane reboots, identity provider latency, or human dashboard load.
+
+| Responsibility Area | Control Plane (`AgentLinkServer`) | Data Plane (`AgentLinkDataPlane`) |
+| :--- | :---: | :---: |
+| **Human Auth & Sessions** | ✅ Owns Google OAuth, sessions, cookies, CSRF | ❌ Zero human session or cookie logic |
+| **Agent & Link Lifecycle** | ✅ Owns enrollment, dual-approval, revocations | ❌ Read-only cached policy snapshot consumer |
+| **Web Assets & UI** | ✅ Serves dashboard, HTML/CSS/JS, modals | ❌ Zero HTML, UI, or static asset dependencies |
+| **Ingress Forwarding** | ❌ Dispatches to Data Plane | ✅ Bounded envelope ingress, routing, idempotency |
+| **Queueing & Spooling** | ❌ Delegates to Data Plane | ✅ `MessageSpool`, leasing, long-polling, acks |
+| **Forwarding Path Auth** | ❌ Out of request path | ✅ Strictly local against cached policy snapshot |
+| **Policy Generation** | ✅ Generates `AuthorizationPolicySnapshot` | ❌ Applies and evaluates policy locally |
+
+### 5.2 Versioned Authorization Policy Contract
+
+The Control Plane generates an immutable, versioned snapshot whenever security policy or topology changes (e.g. key generation, agent enrollment, link approval, link revocation):
+
+```typescript
+interface AuthorizationPolicySnapshot {
+  revision: number;              // Monotonically increasing revision integer
+  generatedAt: string;           // ISO 8601 generation timestamp
+  expiresAt: string;             // Expiry deadline (e.g., now + 5 minutes)
+  stalenessWindowMs: number;     // Allowable staleness window (e.g., 300,000ms)
+  apiKeys: Record<string, ApiKeyPolicyEntry>;
+  humanSessions: Record<string, HumanSessionPolicyEntry>;
+  agents: Record<string, AgentPolicyEntry>;
+  activeLinks: Record<string, LinkPolicyEntry>;
+}
+```
+
+The Data Plane caches the current snapshot in memory. Every message ingress (`POST /api/links/:id/send`), poll (`GET /api/agents/:id/poll`), and ack/nack is checked locally against this cached policy snapshot without synchronous RPC or inter-process lookups to the control plane.
+
+### 5.3 Outage Resilience & Staleness Tolerance
+
+1. **Transient Control Plane Outages**: If the control plane process restarts, crashes, or is disconnected for database maintenance, the Data Plane continues accepting, queueing, leasing, and delivering authorized traffic across existing approved links until the `expiresAt` window lapses (default 5 minutes).
+2. **Revocation Propagation**: When a human operator or agent revokes a link or key, the control plane immediately pushes an updated snapshot to the Data Plane (`applyPolicySnapshot`). The Data Plane atomically switches to the new policy, immediately blocking subsequent traffic on revoked links.
+3. **Expired Policy Safeguard**: If the control plane remains offline beyond the staleness window (`now > expiresAt`), the Data Plane fails closed:
+   - Forwarding endpoints return `HTTP 503 Service Unavailable` with `error: "policy_expired"`.
+   - The health check transitions to `degraded`.
+
+### 5.4 Decomposed Health Checks & UI Outage Detection
+
+The health endpoint (`/health` and `/api/health`) provides fine-grained decomposition of system status:
+
+```json
+{
+  "status": "ok",
+  "ready": true,
+  "uptime": 3600,
+  "controlPlane": {
+    "status": "ok",
+    "ready": true,
+    "policyRevision": 14
+  },
+  "dataPlane": {
+    "status": "ok",
+    "ready": true,
+    "spoolHealthy": true,
+    "policyRevision": 14,
+    "policyStale": false,
+    "policyExpired": false,
+    "queueDepth": 0,
+    "activeLeases": 0,
+    "quarantinedCount": 0
+  }
+}
+```
+
+If the Data Plane crashes, runs out of disk, or shuts down:
+1. `/health` immediately returns **`HTTP 503 Service Unavailable`** with `status: "degraded"` or `"failed"`.
+2. The frontend web UI background poller detects the 503 or degraded status, automatically displaying an alert banner (`🚨 Data Plane Outage / Degraded: Forwarding is temporarily impaired`) and switching header badges to `⚡ Data Plane: Degraded` and `Mesh Impaired`.
+

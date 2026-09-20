@@ -11,6 +11,9 @@ coverage/
 # Runtime state (local private keys & session tokens)
 .data/
 .backup/
+*-spool.json
+messages-spool.json
+portal-state.json
 
 # Logs & environment
 *.log

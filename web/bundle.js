@@ -3767,8 +3767,74 @@ function closeDashboardWebSocket() {
   }
   updateWsBadge("hidden");
 }
+var planeHealthTimer = null;
+async function checkPlaneHealth() {
+  const badge = document.getElementById("dataPlaneHealthBadge");
+  const alertBanner = document.getElementById("dataPlaneAlertBanner");
+  const alertMsg = document.getElementById("dataPlaneAlertMessage");
+  const statusBadge = document.getElementById("statusBadge");
+  try {
+    const res = await fetch("/health", { cache: "no-store" });
+    const data = await res.json().catch(() => null);
+    const isOk = res.status === 200 && data?.dataPlane?.status === "ok";
+    if (isOk) {
+      if (badge) {
+        badge.className = "badge badge-success";
+        badge.textContent = "\u26A1 Data Plane: Online";
+        badge.title = `Data Plane: Online (Policy Rev ${data?.dataPlane?.policyRevision ?? "0"}, Queue: ${data?.dataPlane?.queueDepth ?? 0})`;
+      }
+      if (statusBadge) {
+        statusBadge.className = "badge badge-success";
+        statusBadge.textContent = "Mesh Online";
+      }
+      if (alertBanner) {
+        alertBanner.style.display = "none";
+      }
+    } else {
+      const errDetail = data?.dataPlane?.error || (res.status === 503 ? "Data plane offline or policy expired" : "Health check failed");
+      if (badge) {
+        badge.className = "badge badge-danger";
+        badge.textContent = "\u26A1 Data Plane: Degraded";
+        badge.title = `Data Plane: Degraded - ${errDetail}`;
+      }
+      if (statusBadge) {
+        statusBadge.className = "badge badge-danger";
+        statusBadge.textContent = "Mesh Impaired";
+      }
+      if (alertBanner) {
+        alertBanner.style.display = "flex";
+      }
+      if (alertMsg) {
+        alertMsg.textContent = `Data Plane outage detected (${errDetail}). Message ingress and polling are temporarily impaired.`;
+      }
+    }
+  } catch {
+    if (badge) {
+      badge.className = "badge badge-danger";
+      badge.textContent = "\u26A1 Data Plane: Unreachable";
+      badge.title = "Data plane health endpoint unreachable";
+    }
+    if (statusBadge) {
+      statusBadge.className = "badge badge-danger";
+      statusBadge.textContent = "Mesh Offline";
+    }
+    if (alertBanner) {
+      alertBanner.style.display = "flex";
+    }
+    if (alertMsg) {
+      alertMsg.textContent = "Server is unreachable. Please check network connectivity.";
+    }
+  }
+}
 window.addEventListener("DOMContentLoaded", async () => {
   clientLog("info", "lifecycle", "Application DOM loaded and initialized");
+  checkPlaneHealth();
+  if (!planeHealthTimer) {
+    planeHealthTimer = setInterval(checkPlaneHealth, 5e3);
+  }
+  document.getElementById("btnRetryPlaneHealth")?.addEventListener("click", () => {
+    checkPlaneHealth();
+  });
   const initialRememberedEmail = getCookie("agentlink_remember_email");
   if (initialRememberedEmail) {
     if (inputEmail) inputEmail.value = initialRememberedEmail;

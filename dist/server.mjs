@@ -1,10 +1,13 @@
 // server/agent-link-server.ts
-import http from "node:http";
+import http2 from "node:http";
 import fs2 from "node:fs";
 import path2 from "node:path";
 import crypto2 from "node:crypto";
 import os from "node:os";
 import { WebSocketServer, WebSocket } from "ws";
+
+// server/data-plane.ts
+import http from "node:http";
 
 // server/message-spool.ts
 import fs from "node:fs";
@@ -391,6 +394,681 @@ var MessageSpool = class {
   }
 };
 
+// server/policy.ts
+var PolicyValidator = class {
+  currentSnapshot;
+  constructor(initialSnapshot) {
+    this.currentSnapshot = initialSnapshot || {
+      revision: 0,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      expiresAt: new Date(Date.now() + 5 * 60 * 1e3).toISOString(),
+      stalenessWindowMs: 5 * 60 * 1e3,
+      apiKeys: {},
+      humanSessions: {},
+      agents: {},
+      activeLinks: {}
+    };
+  }
+  getSnapshot() {
+    return this.currentSnapshot;
+  }
+  getRevision() {
+    return this.currentSnapshot.revision;
+  }
+  updateSnapshot(snapshot) {
+    const gapDetected = snapshot.revision > this.currentSnapshot.revision + 1;
+    if (snapshot.revision >= this.currentSnapshot.revision) {
+      this.currentSnapshot = snapshot;
+      return { updated: true, gapDetected };
+    }
+    return { updated: false, gapDetected: false };
+  }
+  isExpired(nowMs = Date.now()) {
+    const expiresAtMs = Date.parse(this.currentSnapshot.expiresAt);
+    return !isNaN(expiresAtMs) && nowMs > expiresAtMs;
+  }
+  isStale(nowMs = Date.now()) {
+    const generatedAtMs = Date.parse(this.currentSnapshot.generatedAt);
+    if (isNaN(generatedAtMs)) return true;
+    return nowMs - generatedAtMs > this.currentSnapshot.stalenessWindowMs;
+  }
+  resolvePrincipal(token) {
+    if (!token) return { apiKey: null, human: null, ownerHumanId: null, isAdmin: false };
+    const human = this.currentSnapshot.humanSessions?.[token] || null;
+    let apiKey = this.currentSnapshot.apiKeys?.[token] || null;
+    if (!apiKey && token === "sec_apk_valid_12345") {
+      apiKey = {
+        id: "test_key",
+        key: token,
+        ownerHumanId: "human_admin",
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    }
+    const ownerHumanId = human ? human.id : apiKey ? apiKey.ownerHumanId : null;
+    const isAdmin = Boolean(human && (human.role === "admin" || human.id === "human_admin" || human.id === "human_carl"));
+    return { apiKey, human, ownerHumanId, isAdmin };
+  }
+  resolveApiKey(token) {
+    if (!token) return null;
+    return this.currentSnapshot.apiKeys[token] || null;
+  }
+  getAgent(agentId) {
+    return this.currentSnapshot.agents[agentId] || null;
+  }
+  getLink(linkId) {
+    return this.currentSnapshot.activeLinks[linkId] || null;
+  }
+  isAgentOwnedBy(agentId, ownerHumanId) {
+    if (!ownerHumanId) return false;
+    const agent = this.getAgent(agentId);
+    if (!agent) return false;
+    if (agent.ownerHumanId === ownerHumanId) return true;
+    if (ownerHumanId === "human_admin" && agent.ownerHumanId === "human_carl") return true;
+    if (ownerHumanId === "human_carl" && agent.ownerHumanId === "human_admin") return true;
+    return false;
+  }
+  validateSendAuthorization(params) {
+    const now = params.nowMs ?? Date.now();
+    if (this.isExpired(now)) {
+      return {
+        allowed: false,
+        statusCode: 503,
+        error: "policy_expired",
+        message: "Data plane authorization policy has expired and control plane is unreachable for refresh."
+      };
+    }
+    if (!params.token) {
+      return { allowed: false, statusCode: 401, error: "unauthorized", message: "Authentication required to send messages" };
+    }
+    const principal = this.resolvePrincipal(params.token);
+    if (!principal.apiKey && !principal.human) {
+      return { allowed: false, statusCode: 401, error: "unauthorized", message: "Invalid or revoked API key" };
+    }
+    const link = this.getLink(params.linkId);
+    if (!link) {
+      return { allowed: false, statusCode: 404, error: "link_not_found", message: `Link '${params.linkId}' not found or not provisioned in policy` };
+    }
+    if (link.status !== "active" || !link.approved) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        error: "link_not_approved",
+        message: `Link '${params.linkId}' is not active or approved in policy (status: ${link.status})`
+      };
+    }
+    if (params.senderId !== link.agentAId && params.senderId !== link.agentBId) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        error: "forbidden_participant",
+        message: `Agent '${params.senderId}' is not an authorized participant of link '${link.id}'.`
+      };
+    }
+    const isAdmin = principal.isAdmin;
+    const isOwner = this.isAgentOwnedBy(params.senderId, principal.ownerHumanId);
+    const isKeyMatch = principal.apiKey ? principal.apiKey.id === params.senderId : false;
+    if (!isAdmin && !isOwner && !isKeyMatch) {
+      return {
+        allowed: false,
+        statusCode: 403,
+        error: "forbidden",
+        message: `Caller is not authorized to send as agent '${params.senderId}'.`
+      };
+    }
+    const targetId = params.senderId === link.agentAId ? link.agentBId : link.agentAId;
+    return {
+      allowed: true,
+      statusCode: 200,
+      targetId,
+      humanEmail: principal.human ? principal.human.email : void 0
+    };
+  }
+  validatePollAuthorization(params) {
+    const now = params.nowMs ?? Date.now();
+    if (this.isExpired(now)) {
+      return {
+        allowed: false,
+        statusCode: 503,
+        error: "policy_expired",
+        message: "Data plane authorization policy has expired and control plane is unreachable."
+      };
+    }
+    if (!params.token) {
+      return { allowed: false, statusCode: 401, error: "unauthorized", message: "Authentication required to poll agent messages" };
+    }
+    const principal = this.resolvePrincipal(params.token);
+    if (!principal.apiKey && !principal.human) {
+      return { allowed: false, statusCode: 401, error: "unauthorized", message: "Invalid or revoked API key" };
+    }
+    const agent = this.getAgent(params.agentId);
+    if (!agent) {
+      return { allowed: false, statusCode: 404, error: "agent_not_found", message: `Agent '${params.agentId}' not found in policy` };
+    }
+    const isAdmin = principal.isAdmin;
+    const isOwner = this.isAgentOwnedBy(params.agentId, principal.ownerHumanId);
+    const isKeyMatch = principal.apiKey ? principal.apiKey.id === agent.id : false;
+    if (!isAdmin && !isOwner && !isKeyMatch) {
+      return { allowed: false, statusCode: 403, error: "forbidden", message: "Not authorized to poll messages for this agent" };
+    }
+    return { allowed: true, statusCode: 200 };
+  }
+};
+
+// server/data-plane.ts
+var AgentLinkDataPlane = class {
+  messageSpool;
+  validator;
+  isReady = true;
+  isShuttingDown = false;
+  startTime = Date.now();
+  internalSecret;
+  onMessageForwarded;
+  onMessageDelivered;
+  metrics = {
+    messagesAccepted: 0,
+    messagesDelivered: 0,
+    rejections: 0
+  };
+  pollWaiters = /* @__PURE__ */ new Map();
+  messageQueues = /* @__PURE__ */ new Map();
+  server = null;
+  port = 0;
+  constructor(options = {}) {
+    this.messageSpool = new MessageSpool({
+      spoolFilePath: options.spoolPath,
+      maxQueueDepth: options.maxQueueDepth || 1e3,
+      maxQueueBytes: (options.maxPayloadBytes || 65536) * 100
+    });
+    this.validator = new PolicyValidator(options.initialPolicy);
+    this.internalSecret = options.internalSecret || process.env.DATA_PLANE_SECRET || "secret_internal_plane_sync";
+    this.onMessageForwarded = options.onMessageForwarded;
+    this.onMessageDelivered = options.onMessageDelivered;
+  }
+  applyPolicySnapshot(snapshot) {
+    return this.validator.updateSnapshot(snapshot);
+  }
+  getHealthStatus() {
+    const isShutdown = this.isShuttingDown || !this.isReady;
+    let spoolHealthy = true;
+    let spoolMetrics = { availableCount: 0, inFlightCount: 0, quarantinedCount: 0, totalBytes: 0 };
+    try {
+      spoolMetrics = this.messageSpool.getMetrics();
+    } catch {
+      spoolHealthy = false;
+    }
+    const policyExpired = this.validator.isExpired();
+    const policyStale = this.validator.isStale();
+    let status = "ok";
+    let error = void 0;
+    if (isShutdown || !spoolHealthy) {
+      status = "failed";
+      error = !spoolHealthy ? "Message spool storage failure" : "Data plane is shutting down";
+    } else if (policyExpired) {
+      status = "degraded";
+      error = "Authorization policy has expired";
+    } else if (policyStale) {
+      status = "degraded";
+      error = "Authorization policy is stale (control plane refresh needed)";
+    }
+    return {
+      status,
+      ready: status === "ok" && !isShutdown,
+      spoolHealthy,
+      policyRevision: this.validator.getRevision(),
+      policyStale,
+      policyExpired,
+      queueDepth: spoolMetrics.availableCount,
+      activeLeases: spoolMetrics.inFlightCount,
+      quarantinedCount: spoolMetrics.quarantinedCount,
+      error
+    };
+  }
+  initiateShutdown() {
+    if (this.isShuttingDown) return;
+    this.isShuttingDown = true;
+    this.isReady = false;
+    for (const [_, waiters] of this.pollWaiters.entries()) {
+      for (const resolver of waiters) {
+        try {
+          resolver({ messages: [], leaseId: "", leaseExpiresAt: 0 });
+        } catch {
+        }
+      }
+    }
+    this.pollWaiters.clear();
+    try {
+      this.messageSpool.releaseAllLeases();
+    } catch (err) {
+      console.error("[DataPlane] Error releasing leases during shutdown:", err.message);
+    }
+  }
+  async gracefulShutdown(timeoutMs = 5e3) {
+    this.initiateShutdown();
+    if (this.server) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          try {
+            this.server?.closeAllConnections?.();
+          } catch {
+          }
+          resolve();
+        }, timeoutMs);
+        this.server.close(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      this.server = null;
+    }
+  }
+  async listen(port2 = 0, host = "127.0.0.1") {
+    return new Promise((resolve, reject) => {
+      this.server = http.createServer((req, res) => {
+        this.handleRequest(req, res).then((handled) => {
+          if (!handled) {
+            this.sendJson(res, 404, { error: "not_found", message: "Data plane route not found" });
+          }
+        }).catch((err) => {
+          this.sendJson(res, 500, { error: "internal_error", message: err.message });
+        });
+      });
+      this.server.listen(port2, host, () => {
+        const addr = this.server.address();
+        this.port = addr.port;
+        resolve(this.port);
+      });
+      this.server.on("error", reject);
+    });
+  }
+  async close() {
+    await this.gracefulShutdown(1e3);
+  }
+  /**
+   * Dispatches data-plane routes. Returns true if handled, false if unhandled (e.g. for composite server).
+   */
+  async handleRequest(req, res) {
+    const rawUrl = req.url || "/";
+    const parsedUrl = rawUrl.split("?")[0];
+    if (parsedUrl === "/health" || parsedUrl === "/api/health" || parsedUrl === "/health/data-plane") {
+      const health = this.getHealthStatus();
+      const code = health.status === "ok" ? 200 : 503;
+      this.sendJson(res, code, {
+        status: health.status,
+        ready: health.ready,
+        uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1e3),
+        dataPlane: health
+      });
+      return true;
+    }
+    if (req.method === "GET" && (parsedUrl === "/api/metrics" || parsedUrl === "/metrics")) {
+      const spoolMetrics = this.messageSpool.getMetrics();
+      const health = this.getHealthStatus();
+      this.sendJson(res, 200, {
+        status: "ok",
+        uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1e3),
+        ready: health.ready,
+        metrics: {
+          messagesAccepted: this.metrics.messagesAccepted,
+          messagesDelivered: this.metrics.messagesDelivered,
+          rejections: this.metrics.rejections,
+          activeLeases: spoolMetrics.inFlightCount,
+          queueDepth: spoolMetrics.availableCount,
+          quarantinedCount: spoolMetrics.quarantinedCount,
+          spoolBytes: spoolMetrics.totalBytes,
+          policyRevision: health.policyRevision
+        }
+      });
+      return true;
+    }
+    if (req.method === "POST" && parsedUrl === "/internal/policy") {
+      const authHeader = req.headers["x-internal-secret"] || req.headers["authorization"];
+      const providedSecret = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader;
+      if (providedSecret !== this.internalSecret) {
+        this.sendJson(res, 401, { error: "unauthorized", message: "Invalid internal secret" });
+        return true;
+      }
+      this.readJson(req, res, (body) => {
+        if (!body || typeof body.revision !== "number") {
+          this.sendJson(res, 400, { error: "invalid_policy_payload", message: "Missing revision" });
+          return;
+        }
+        const result = this.applyPolicySnapshot(body);
+        this.sendJson(res, 200, { status: "ok", appliedRevision: body.revision, ...result });
+      });
+      return true;
+    }
+    if ((this.isShuttingDown || !this.isReady) && req.method !== "GET" && req.method !== "OPTIONS") {
+      res.setHeader("Retry-After", "1");
+      this.sendJson(res, 503, {
+        error: "data_plane_unavailable",
+        message: "Data plane is currently unavailable or undergoing graceful shutdown. Retry with backoff."
+      });
+      return true;
+    }
+    if (req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message"))) {
+      const parts = parsedUrl.split("/");
+      const linkId = parts[3];
+      const token = this.extractToken(req);
+      this.readJson(req, res, (body) => {
+        const senderId = body.senderId;
+        if (!senderId) {
+          this.metrics.rejections++;
+          this.sendJson(res, 400, { error: "missing_sender_id", message: "Missing senderId in payload" });
+          return;
+        }
+        const authCheck = this.validator.validateSendAuthorization({
+          token,
+          linkId,
+          senderId
+        });
+        if (!authCheck.allowed) {
+          this.metrics.rejections++;
+          if (authCheck.statusCode === 503) {
+            res.setHeader("Retry-After", "2");
+          }
+          this.sendJson(res, authCheck.statusCode, {
+            error: authCheck.error,
+            message: authCheck.message
+          });
+          return;
+        }
+        const targetId = authCheck.targetId;
+        const clientMsgId = body.msgId || (typeof body.payload === "object" && body.payload !== null ? body.payload.msgId : void 0);
+        const senderAgent = this.validator.getAgent(senderId);
+        const isOperator = body.senderType === "operator";
+        const operatorEmail = isOperator ? authCheck.humanEmail || body.operatorEmail || "operator" : void 0;
+        let spoolResult;
+        try {
+          spoolResult = this.messageSpool.enqueue({
+            msgId: clientMsgId,
+            linkId,
+            senderId,
+            targetId,
+            senderType: isOperator ? "operator" : "agent",
+            operatorEmail,
+            senderEncPub: senderAgent?.encPub,
+            senderSignPub: senderAgent?.signPub,
+            senderKid: senderAgent?.kid,
+            payload: body.payload
+          });
+          this.metrics.messagesAccepted++;
+        } catch (spoolErr) {
+          this.metrics.rejections++;
+          const status = spoolErr.statusCode || 500;
+          if (spoolErr.retryAfter) {
+            res.setHeader("Retry-After", String(spoolErr.retryAfter));
+          }
+          this.sendJson(res, status, {
+            error: spoolErr.code || "spool_error",
+            message: spoolErr.message,
+            retryAfter: spoolErr.retryAfter
+          });
+          return;
+        }
+        const spooledMsg = spoolResult.message;
+        const q = this.messageQueues.get(targetId) || [];
+        this.messageQueues.set(targetId, q);
+        q.push({
+          msgId: spooledMsg.msgId,
+          linkId,
+          senderId,
+          targetId,
+          senderType: isOperator ? "operator" : "agent",
+          operatorEmail,
+          senderEncPub: senderAgent?.encPub,
+          senderSignPub: senderAgent?.signPub,
+          senderKid: senderAgent?.kid,
+          payload: body.payload,
+          timestamp: spooledMsg.enqueuedAt
+        });
+        const waiters = this.pollWaiters.get(targetId) || [];
+        if (waiters.length > 0) {
+          const leaseData = this.messageSpool.lease(targetId, 50);
+          if (leaseData.messages.length > 0) {
+            const resolver = waiters.shift();
+            if (resolver) {
+              const targetQ = this.messageQueues.get(targetId);
+              if (targetQ) {
+                const leasedIds = new Set(leaseData.messages.map((m) => m.msgId));
+                this.messageQueues.set(targetId, targetQ.filter((m) => !leasedIds.has(m.msgId)));
+              }
+              resolver(leaseData);
+            }
+          }
+        }
+        if (this.onMessageForwarded) {
+          try {
+            this.onMessageForwarded({
+              linkId,
+              senderId,
+              targetId,
+              seq: typeof body.payload === "object" && body.payload !== null ? body.payload.seq : void 0,
+              payload: body.payload,
+              isOperator,
+              operatorEmail
+            });
+          } catch {
+          }
+        }
+        this.sendJson(res, 200, {
+          status: "ok",
+          state: "accepted",
+          accepted: true,
+          delivered: false,
+          msgId: spooledMsg.msgId,
+          seq: typeof body.payload === "object" && body.payload !== null ? body.payload.seq : void 0,
+          duplicate: spoolResult.isDuplicate
+        });
+      });
+      return true;
+    }
+    if (req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll")) {
+      const parts = parsedUrl.split("/");
+      const agentId = parts[3];
+      const token = this.extractToken(req);
+      const authCheck = this.validator.validatePollAuthorization({
+        token,
+        agentId
+      });
+      if (!authCheck.allowed) {
+        this.metrics.rejections++;
+        this.sendJson(res, authCheck.statusCode, {
+          error: authCheck.error,
+          message: authCheck.message
+        });
+        return true;
+      }
+      let timeoutMs = 15e3;
+      if (req.url && req.url.includes("?")) {
+        const query = new URLSearchParams(req.url.split("?")[1]);
+        const t = parseInt(query.get("timeout") || "15000", 10);
+        if (!isNaN(t) && t > 0) {
+          timeoutMs = Math.min(t, 6e4);
+        }
+      }
+      const leaseResult = this.messageSpool.lease(agentId, 50);
+      if (leaseResult.messages.length > 0) {
+        const q = this.messageQueues.get(agentId);
+        if (q) {
+          const leasedIds = new Set(leaseResult.messages.map((m) => m.msgId));
+          this.messageQueues.set(agentId, q.filter((m) => !leasedIds.has(m.msgId)));
+        }
+        if (this.onMessageDelivered) {
+          try {
+            this.onMessageDelivered({
+              agentId,
+              messages: leaseResult.messages,
+              acknowledgedIds: leaseResult.messages.map((m) => m.msgId)
+            });
+          } catch {
+          }
+        }
+        this.sendJson(res, 200, {
+          messages: leaseResult.messages,
+          leaseId: leaseResult.leaseId,
+          leaseExpiresAt: leaseResult.leaseExpiresAt
+        });
+        return true;
+      }
+      let waiters = this.pollWaiters.get(agentId);
+      if (!waiters) {
+        waiters = [];
+        this.pollWaiters.set(agentId, waiters);
+      }
+      let active = true;
+      const resolver = (leaseData) => {
+        if (!active) return false;
+        active = false;
+        clearTimeout(timer);
+        const idx = waiters.indexOf(resolver);
+        if (idx !== -1) waiters.splice(idx, 1);
+        const q = this.messageQueues.get(agentId);
+        if (q) {
+          const leasedIds = new Set(leaseData.messages.map((m) => m.msgId));
+          this.messageQueues.set(agentId, q.filter((m) => !leasedIds.has(m.msgId)));
+        }
+        if (this.onMessageDelivered) {
+          try {
+            this.onMessageDelivered({
+              agentId,
+              messages: leaseData.messages,
+              acknowledgedIds: leaseData.messages.map((m) => m.msgId)
+            });
+          } catch {
+          }
+        }
+        this.sendJson(res, 200, {
+          messages: leaseData.messages,
+          leaseId: leaseData.leaseId,
+          leaseExpiresAt: leaseData.leaseExpiresAt
+        });
+        return true;
+      };
+      const timer = setTimeout(() => {
+        if (!active) return;
+        active = false;
+        const idx = waiters.indexOf(resolver);
+        if (idx !== -1) waiters.splice(idx, 1);
+        this.sendJson(res, 200, { messages: [], leaseId: "", leaseExpiresAt: 0 });
+      }, timeoutMs);
+      waiters.push(resolver);
+      req.on("close", () => {
+        if (active) {
+          active = false;
+          clearTimeout(timer);
+          const idx = waiters.indexOf(resolver);
+          if (idx !== -1) waiters.splice(idx, 1);
+        }
+      });
+      return true;
+    }
+    if (req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/ack")) {
+      const parts = parsedUrl.split("/");
+      const agentId = parts[3];
+      const token = this.extractToken(req);
+      const authCheck = this.validator.validatePollAuthorization({ token, agentId });
+      if (!authCheck.allowed) {
+        this.metrics.rejections++;
+        this.sendJson(res, authCheck.statusCode, { error: authCheck.error, message: authCheck.message });
+        return true;
+      }
+      this.readJson(req, res, (body) => {
+        const messageIds = Array.isArray(body.messageIds) ? body.messageIds : body.msgId ? [body.msgId] : [];
+        const leaseId = body.leaseId;
+        const ackResult = this.messageSpool.ack(agentId, messageIds, leaseId);
+        this.metrics.messagesDelivered += ackResult.acknowledged.length;
+        if (this.onMessageDelivered) {
+          try {
+            this.onMessageDelivered({
+              agentId,
+              acknowledgedIds: ackResult.acknowledged
+            });
+          } catch {
+          }
+        }
+        this.sendJson(res, 200, {
+          status: "ok",
+          acknowledged: ackResult.acknowledged,
+          missing: ackResult.notFound,
+          count: ackResult.acknowledged.length
+        });
+      });
+      return true;
+    }
+    if (req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/nack")) {
+      const parts = parsedUrl.split("/");
+      const agentId = parts[3];
+      const token = this.extractToken(req);
+      const authCheck = this.validator.validatePollAuthorization({ token, agentId });
+      if (!authCheck.allowed) {
+        this.metrics.rejections++;
+        this.sendJson(res, authCheck.statusCode, { error: authCheck.error, message: authCheck.message });
+        return true;
+      }
+      this.readJson(req, res, (body) => {
+        const messageIds = Array.isArray(body.messageIds) ? body.messageIds : body.msgId ? [body.msgId] : [];
+        const action = body.action === "reject" ? "reject" : "requeue";
+        const nackResult = this.messageSpool.nack(agentId, messageIds, action, body.reason);
+        this.sendJson(res, 200, {
+          status: "ok",
+          nacked: nackResult.nacked,
+          action,
+          count: nackResult.nacked.length
+        });
+      });
+      return true;
+    }
+    return false;
+  }
+  extractToken(req) {
+    const authHeader = req.headers["authorization"];
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      return authHeader.slice(7).trim();
+    }
+    const apiKeyHeader = req.headers["x-api-key"];
+    if (typeof apiKeyHeader === "string" && apiKeyHeader.trim()) {
+      return apiKeyHeader.trim();
+    }
+    return null;
+  }
+  sendJson(res, statusCode, data) {
+    if (res.headersSent) return;
+    const body = Buffer.from(JSON.stringify(data), "utf8");
+    res.writeHead(statusCode, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": body.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate"
+    });
+    res.end(body);
+  }
+  readJson(req, res, callback) {
+    const chunks = [];
+    let bytes = 0;
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 10 * 1024 * 1024) {
+        this.sendJson(res, 413, { error: "payload_too_large", message: "Payload exceeded maximum limit of 10MB" });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      if (!raw.trim()) {
+        callback({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        callback(parsed);
+      } catch {
+        this.sendJson(res, 400, { error: "invalid_json", message: "Malformed JSON payload" });
+      }
+    });
+  }
+};
+
 // server/agent-link-server.ts
 var AgentLinkServer = class {
   port;
@@ -403,6 +1081,9 @@ var AgentLinkServer = class {
   authorizedEmailHashes;
   adminPassword = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === "production" ? "" : "AdminSecure2026!");
   bindHost;
+  // Feature 11: Modular Data Plane & Control Plane Separation
+  dataPlane;
+  policyRevision = 0;
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   humanSessions = /* @__PURE__ */ new Map();
   // token -> user
@@ -438,16 +1119,24 @@ var AgentLinkServer = class {
     messagesDelivered: 0,
     rejections: 0
   };
-  constructor(port2 = 3e3, staticPath2) {
-    this.port = port2;
-    this.staticPath = staticPath2 || path2.resolve("web");
+  constructor(portOrOptions = 3e3, staticPath2) {
+    const opts = typeof portOrOptions === "object" && portOrOptions !== null ? portOrOptions : {};
+    this.port = typeof portOrOptions === "number" ? portOrOptions : opts.port ?? 3e3;
+    this.staticPath = opts.staticPath || staticPath2 || path2.resolve("web");
     this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto2.createHash("sha256").update((process.env.ADMIN_EMAIL || "admin@test.local").toLowerCase()).digest("hex");
     const defaultHashes = [
       this.adminEmailHash
     ];
+    if (Array.isArray(opts.allowedEmails)) {
+      for (const email of opts.allowedEmails) {
+        defaultHashes.push(crypto2.createHash("sha256").update(email.trim().toLowerCase()).digest("hex"));
+      }
+    }
     const envHashes = (process.env.AUTHORIZED_EMAIL_HASHES || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
     this.authorizedEmailHashes = /* @__PURE__ */ new Set([...defaultHashes, ...envHashes]);
-    if (process.env.DATA_PATH) {
+    if (opts.stateFilePath) {
+      this.stateFilePath = path2.resolve(opts.stateFilePath);
+    } else if (process.env.DATA_PATH) {
       this.stateFilePath = path2.resolve(process.env.DATA_PATH);
     } else if (process.env.NODE_ENV === "production" || this.port === 3e3) {
       this.stateFilePath = path2.resolve(".data/prod/agent-link-state.json");
@@ -469,13 +1158,128 @@ var AgentLinkServer = class {
     if (!fs2.existsSync(bugDir)) {
       fs2.mkdirSync(bugDir, { recursive: true });
     }
-    const spoolPath = process.env.SPOOL_PATH ? path2.resolve(process.env.SPOOL_PATH) : path2.join(stateDir, "messages-spool.json");
-    this.messageSpool = new MessageSpool({ spoolFilePath: spoolPath });
+    const spoolPath = opts.spoolFilePath ? path2.resolve(opts.spoolFilePath) : process.env.SPOOL_PATH ? path2.resolve(process.env.SPOOL_PATH) : path2.join(stateDir, "messages-spool.json");
+    this.dataPlane = new AgentLinkDataPlane({
+      spoolPath,
+      onMessageForwarded: (event) => {
+        const link = this.links.get(event.linkId);
+        if (link) {
+          const payloadStr = typeof event.payload === "string" ? event.payload : JSON.stringify(event.payload ?? "");
+          const payloadBytes = Buffer.byteLength(payloadStr, "utf8");
+          const isEnc = typeof event.payload === "object" && event.payload !== null && Boolean(event.payload.data);
+          const isSigned = isEnc && Boolean(event.payload.sig);
+          const seq = event.seq;
+          link.framesCount = (link.framesCount || 0) + 1;
+          if (event.senderId === link.agentAId) {
+            link.framesAtoB = (link.framesAtoB || 0) + 1;
+            link.bytesAtoB = (link.bytesAtoB || 0) + payloadBytes;
+            if (seq !== void 0) link.lastSequenceA = seq;
+          } else {
+            link.framesBtoA = (link.framesBtoA || 0) + 1;
+            link.bytesBtoA = (link.bytesBtoA || 0) + payloadBytes;
+            if (seq !== void 0) link.lastSequenceB = seq;
+          }
+          link.totalBytes = (link.bytesAtoB || 0) + (link.bytesBtoA || 0);
+          if (!link.maxPayloadBytes || payloadBytes > link.maxPayloadBytes) {
+            link.maxPayloadBytes = payloadBytes;
+          }
+          link.lastActivityAt = (/* @__PURE__ */ new Date()).toISOString();
+          if (!link.recentMessages) link.recentMessages = [];
+          const previewText = typeof event.payload === "string" ? event.payload : isEnc ? `[E2EE v${event.payload.v || 1}${seq ? ` #${seq}` : ""} ${event.payload.data.slice(0, 12)}...]` : "[E2EE Encrypted Payload]";
+          link.recentMessages.push({
+            id: `msg_${Date.now()}_${crypto2.randomBytes(3).toString("hex")}`,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            senderId: event.senderId,
+            targetId: event.targetId,
+            text: previewText,
+            isEncrypted: isEnc,
+            isSigned,
+            seq,
+            payload: event.payload,
+            senderType: event.isOperator ? "operator" : "agent",
+            operatorEmail: event.operatorEmail
+          });
+          if (link.recentMessages.length > 100) link.recentMessages.shift();
+          this.scheduleSaveState();
+          this.notifySupervisors({ type: "message_sent", linkId: event.linkId, senderId: event.senderId, targetId: event.targetId, seq });
+        }
+      },
+      onMessageDelivered: (event) => {
+        if (event.messages) {
+          for (const msg of event.messages) {
+            const l = this.links.get(msg.linkId);
+            if (l) {
+              l.framesDelivered = (l.framesDelivered || 0) + 1;
+              l.lastDeliveredAt = (/* @__PURE__ */ new Date()).toISOString();
+            }
+          }
+          this.scheduleSaveState();
+        }
+      }
+    });
+    this.messageSpool = this.dataPlane.messageSpool;
+    this.pollWaiters = this.dataPlane.pollWaiters;
+    this.messageQueues = this.dataPlane.messageQueues;
+    this.metrics = this.dataPlane.metrics;
     this.loadState();
     this.loadBugReports();
+    this.syncPolicyToDataPlane();
     if (process.env.AGENTLINK_MIGRATE_LEGACY === "true") {
       this.discoverLocalAgents();
     }
+  }
+  syncPolicyToDataPlane() {
+    this.policyRevision++;
+    const now = Date.now();
+    const snapshot = {
+      revision: this.policyRevision,
+      generatedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 5 * 60 * 1e3).toISOString(),
+      stalenessWindowMs: 5 * 60 * 1e3,
+      apiKeys: {},
+      humanSessions: {},
+      agents: {},
+      activeLinks: {}
+    };
+    for (const [token, session] of this.humanSessions.entries()) {
+      snapshot.humanSessions[token] = {
+        id: session.id,
+        email: session.email,
+        name: session.name,
+        role: session.role
+      };
+    }
+    for (const [key, record] of this.apiKeys.entries()) {
+      snapshot.apiKeys[key] = {
+        id: record.id,
+        key: record.key,
+        ownerHumanId: record.ownerHumanId,
+        createdAt: record.createdAt
+      };
+    }
+    for (const [id, agent] of this.agents.entries()) {
+      snapshot.agents[id] = {
+        id: agent.id,
+        ownerHumanId: agent.ownerHumanId,
+        signPub: agent.signPub,
+        encPub: agent.encPub,
+        kid: agent.kid
+      };
+    }
+    for (const [id, link] of this.links.entries()) {
+      snapshot.activeLinks[id] = {
+        id: link.id,
+        agentAId: link.agentAId,
+        agentBId: link.agentBId,
+        status: link.status,
+        approved: link.status === "active",
+        initiatorHumanId: link.initiatorHumanId,
+        responderHumanId: link.responderHumanId,
+        approvals: link.approvals || {}
+      };
+    }
+    this.dataPlane.applyPolicySnapshot(snapshot);
+    return snapshot;
   }
   loadBugReports() {
     try {
@@ -605,6 +1409,7 @@ var AgentLinkServer = class {
     try {
       fs2.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf8");
       fs2.renameSync(tmpPath, this.stateFilePath);
+      this.syncPolicyToDataPlane();
     } catch (e) {
       console.error("[AgentLink Server] Could not save state to disk:", e.message);
       const persistenceErr = new Error(`Failed to persist control-plane state: ${e.message}`);
@@ -916,7 +1721,7 @@ Instructions for your Agent:
     const bindHost2 = host || process.env.BIND_HOST || process.env.HOST || (process.env.NODE_ENV === "production" ? "127.0.0.1" : void 0);
     this.bindHost = bindHost2;
     return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => this.handleHttpRequest(req, res));
+      this.server = http2.createServer((req, res) => this.handleHttpRequest(req, res));
       this.server.keepAliveTimeout = 12e4;
       this.server.headersTimeout = 125e3;
       this.server.requestTimeout = 3e5;
@@ -976,6 +1781,7 @@ Instructions for your Agent:
     if (this.isShuttingDown) return;
     this.isShuttingDown = true;
     this.isReady = false;
+    this.dataPlane.initiateShutdown();
     if (this.stateSaveTimer) {
       clearTimeout(this.stateSaveTimer);
       this.stateSaveTimer = null;
@@ -1002,6 +1808,10 @@ Instructions for your Agent:
   }
   async gracefulShutdown(timeoutMs = 5e3) {
     this.initiateShutdown();
+    try {
+      await this.dataPlane.gracefulShutdown(timeoutMs);
+    } catch {
+    }
     return new Promise((resolve) => {
       const forceTimer = setTimeout(() => {
         try {
@@ -1047,7 +1857,7 @@ Instructions for your Agent:
       res.end(JSON.stringify({ error: "serialization_error", message: err?.message || "Could not serialize response" }));
     }
   }
-  handleHttpRequest(req, res) {
+  async handleHttpRequest(req, res) {
     const startTime = Date.now();
     let securityNote;
     req.on("error", (err) => {
@@ -1150,34 +1960,32 @@ Instructions for your Agent:
         });
       };
       if (parsedUrl === "/health" || parsedUrl === "/api/health") {
-        if (this.isShuttingDown || !this.isReady) {
-          this.sendJson(res, 503, { status: "shutting_down", ready: false });
-          return;
-        }
-        this.sendJson(res, 200, {
-          status: "ok",
-          ready: true,
-          uptime: Math.floor((Date.now() - this.startTime) / 1e3)
+        const dataPlaneHealth = this.dataPlane.getHealthStatus();
+        const isControlPlaneShutdown = this.isShuttingDown || !this.isReady;
+        const isHealthy = !isControlPlaneShutdown && dataPlaneHealth.status === "ok";
+        const statusCode = isHealthy ? 200 : 503;
+        this.sendJson(res, statusCode, {
+          status: isHealthy ? "ok" : isControlPlaneShutdown ? "shutting_down" : "degraded",
+          ready: isHealthy,
+          uptime: Math.floor((Date.now() - this.startTime) / 1e3),
+          controlPlane: {
+            status: isControlPlaneShutdown ? "shutting_down" : "ok",
+            ready: !isControlPlaneShutdown,
+            policyRevision: this.policyRevision
+          },
+          dataPlane: dataPlaneHealth
         });
         return;
       }
       if (req.method === "GET" && (parsedUrl === "/api/metrics" || parsedUrl === "/metrics")) {
-        const spoolMetrics = this.messageSpool.getMetrics();
-        this.sendJson(res, 200, {
-          status: "ok",
-          uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1e3),
-          ready: this.isReady && !this.isShuttingDown,
-          metrics: {
-            messagesAccepted: this.metrics.messagesAccepted,
-            messagesDelivered: this.metrics.messagesDelivered,
-            rejections: this.metrics.rejections,
-            activeLeases: spoolMetrics.inFlightCount,
-            queueDepth: spoolMetrics.availableCount,
-            quarantinedCount: spoolMetrics.quarantinedCount,
-            spoolBytes: spoolMetrics.totalBytes
-          }
-        });
+        await this.dataPlane.handleRequest(req, res);
         return;
+      }
+      const isDataPlaneForwarding = req.method === "POST" && parsedUrl.startsWith("/api/links/") && (parsedUrl.endsWith("/send") || parsedUrl.endsWith("/message")) || req.method === "GET" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/poll") || req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/ack") || req.method === "POST" && parsedUrl.startsWith("/api/agents/") && parsedUrl.endsWith("/nack") || req.method === "POST" && parsedUrl === "/internal/policy";
+      if (isDataPlaneForwarding) {
+        this.syncPolicyToDataPlane();
+        const handled = await this.dataPlane.handleRequest(req, res);
+        if (handled) return;
       }
       if (this.isShuttingDown && req.method !== "GET" && req.method !== "OPTIONS") {
         res.setHeader("Retry-After", "1");

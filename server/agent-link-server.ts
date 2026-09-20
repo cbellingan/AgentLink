@@ -10,6 +10,8 @@ import os from 'node:os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { HumanUser, ApiKeyRecord, AgentRecord, KeyRotationEntry, LinkRecord, LinkMetrics, InviteRecord, AccessLogEntry, ClientLogEntry, BugReportRecord } from './types.js';
 import { MessageSpool, SpoolMessageEntry } from './message-spool.js';
+import { AgentLinkDataPlane } from './data-plane.js';
+import { AuthorizationPolicySnapshot } from './policy.js';
 
 export class AgentLinkServer {
   private port: number;
@@ -23,6 +25,10 @@ export class AgentLinkServer {
   public readonly authorizedEmailHashes: Set<string>;
   public adminPassword: string = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === 'production' ? '' : 'AdminSecure2026!');
   public bindHost?: string;
+
+  // Feature 11: Modular Data Plane & Control Plane Separation
+  public dataPlane: AgentLinkDataPlane;
+  public policyRevision: number = 0;
 
   // In-memory state (Cloudflare KV/Durable Object in edge deployments)
   public humanSessions: Map<string, HumanUser> = new Map(); // token -> user
@@ -53,20 +59,35 @@ export class AgentLinkServer {
     rejections: 0,
   };
 
-  constructor(port: number = 3000, staticPath?: string) {
-    this.port = port;
-    this.staticPath = staticPath || path.resolve('web');
+  constructor(portOrOptions: number | {
+    port?: number;
+    staticPath?: string;
+    stateFilePath?: string;
+    spoolFilePath?: string;
+    googleClientIds?: string[];
+    allowedEmails?: string[];
+  } = 3000, staticPath?: string) {
+    const opts = typeof portOrOptions === 'object' && portOrOptions !== null ? portOrOptions : {};
+    this.port = typeof portOrOptions === 'number' ? portOrOptions : (opts.port ?? 3000);
+    this.staticPath = opts.staticPath || staticPath || path.resolve('web');
     this.adminEmailHash = process.env.ADMIN_EMAIL_HASH || crypto.createHash('sha256').update((process.env.ADMIN_EMAIL || 'admin@test.local').toLowerCase()).digest('hex');
 
     const defaultHashes = [
       this.adminEmailHash,
     ];
+    if (Array.isArray(opts.allowedEmails)) {
+      for (const email of opts.allowedEmails) {
+        defaultHashes.push(crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex'));
+      }
+    }
     const envHashes = (process.env.AUTHORIZED_EMAIL_HASHES || '')
       .split(',')
       .map(h => h.trim().toLowerCase())
       .filter(Boolean);
     this.authorizedEmailHashes = new Set([...defaultHashes, ...envHashes]);
-    if (process.env.DATA_PATH) {
+    if (opts.stateFilePath) {
+      this.stateFilePath = path.resolve(opts.stateFilePath);
+    } else if (process.env.DATA_PATH) {
       this.stateFilePath = path.resolve(process.env.DATA_PATH);
     } else if (process.env.NODE_ENV === 'production' || this.port === 3000) {
       this.stateFilePath = path.resolve('.data/prod/agent-link-state.json');
@@ -90,17 +111,147 @@ export class AgentLinkServer {
       fs.mkdirSync(bugDir, { recursive: true });
     }
 
-    const spoolPath = process.env.SPOOL_PATH
-      ? path.resolve(process.env.SPOOL_PATH)
-      : path.join(stateDir, 'messages-spool.json');
-    this.messageSpool = new MessageSpool({ spoolFilePath: spoolPath });
+    const spoolPath = opts.spoolFilePath
+      ? path.resolve(opts.spoolFilePath)
+      : (process.env.SPOOL_PATH
+        ? path.resolve(process.env.SPOOL_PATH)
+        : path.join(stateDir, 'messages-spool.json'));
+
+    this.dataPlane = new AgentLinkDataPlane({
+      spoolPath,
+      onMessageForwarded: (event) => {
+        const link = this.links.get(event.linkId);
+        if (link) {
+          const payloadStr = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload ?? '');
+          const payloadBytes = Buffer.byteLength(payloadStr, 'utf8');
+          const isEnc = typeof event.payload === 'object' && event.payload !== null && Boolean(event.payload.data);
+          const isSigned = isEnc && Boolean(event.payload.sig);
+          const seq = event.seq;
+
+          link.framesCount = (link.framesCount || 0) + 1;
+          if (event.senderId === link.agentAId) {
+            link.framesAtoB = (link.framesAtoB || 0) + 1;
+            link.bytesAtoB = (link.bytesAtoB || 0) + payloadBytes;
+            if (seq !== undefined) link.lastSequenceA = seq;
+          } else {
+            link.framesBtoA = (link.framesBtoA || 0) + 1;
+            link.bytesBtoA = (link.bytesBtoA || 0) + payloadBytes;
+            if (seq !== undefined) link.lastSequenceB = seq;
+          }
+          link.totalBytes = (link.bytesAtoB || 0) + (link.bytesBtoA || 0);
+          if (!link.maxPayloadBytes || payloadBytes > link.maxPayloadBytes) {
+            link.maxPayloadBytes = payloadBytes;
+          }
+          link.lastActivityAt = new Date().toISOString();
+
+          if (!link.recentMessages) link.recentMessages = [];
+          const previewText = typeof event.payload === 'string' 
+            ? event.payload 
+            : (isEnc ? `[E2EE v${event.payload.v || 1}${seq ? ` #${seq}` : ''} ${event.payload.data.slice(0, 12)}...]` : '[E2EE Encrypted Payload]');
+          link.recentMessages.push({
+            id: `msg_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`,
+            timestamp: new Date().toISOString(),
+            senderId: event.senderId,
+            targetId: event.targetId,
+            text: previewText,
+            isEncrypted: isEnc,
+            isSigned,
+            seq,
+            payload: event.payload,
+            senderType: event.isOperator ? 'operator' : 'agent',
+            operatorEmail: event.operatorEmail,
+          });
+          if (link.recentMessages.length > 100) link.recentMessages.shift();
+          this.scheduleSaveState();
+          this.notifySupervisors({ type: 'message_sent', linkId: event.linkId, senderId: event.senderId, targetId: event.targetId, seq });
+        }
+      },
+      onMessageDelivered: (event: { agentId: string; messages?: any[]; acknowledgedIds: string[] }) => {
+        if (event.messages) {
+          for (const msg of event.messages) {
+            const l = this.links.get(msg.linkId);
+            if (l) {
+              l.framesDelivered = (l.framesDelivered || 0) + 1;
+              l.lastDeliveredAt = new Date().toISOString();
+            }
+          }
+          this.scheduleSaveState();
+        }
+      },
+    });
+
+    this.messageSpool = this.dataPlane.messageSpool;
+    this.pollWaiters = this.dataPlane.pollWaiters;
+    this.messageQueues = this.dataPlane.messageQueues;
+    this.metrics = this.dataPlane.metrics;
 
     this.loadState();
     this.loadBugReports();
+    this.syncPolicyToDataPlane();
+
     // Feature 7.5: Do not auto-seed host agents or auto-approve business links on clean startup
     if (process.env.AGENTLINK_MIGRATE_LEGACY === 'true') {
       this.discoverLocalAgents();
     }
+  }
+
+  public syncPolicyToDataPlane(): AuthorizationPolicySnapshot {
+    this.policyRevision++;
+    const now = Date.now();
+    const snapshot: AuthorizationPolicySnapshot = {
+      revision: this.policyRevision,
+      generatedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 5 * 60 * 1000).toISOString(),
+      stalenessWindowMs: 5 * 60 * 1000,
+      apiKeys: {},
+      humanSessions: {},
+      agents: {},
+      activeLinks: {},
+    };
+
+    for (const [token, session] of this.humanSessions.entries()) {
+      snapshot.humanSessions[token] = {
+        id: session.id,
+        email: session.email,
+        name: session.name,
+        role: session.role,
+      };
+    }
+
+    for (const [key, record] of this.apiKeys.entries()) {
+      snapshot.apiKeys[key] = {
+        id: record.id,
+        key: record.key,
+        ownerHumanId: record.ownerHumanId,
+        createdAt: record.createdAt,
+      };
+    }
+
+    for (const [id, agent] of this.agents.entries()) {
+      snapshot.agents[id] = {
+        id: agent.id,
+        ownerHumanId: agent.ownerHumanId,
+        signPub: agent.signPub,
+        encPub: agent.encPub,
+        kid: agent.kid,
+      };
+    }
+
+    for (const [id, link] of this.links.entries()) {
+      snapshot.activeLinks[id] = {
+        id: link.id,
+        agentAId: link.agentAId,
+        agentBId: link.agentBId,
+        status: link.status,
+        approved: link.status === 'active',
+        initiatorHumanId: link.initiatorHumanId,
+        responderHumanId: link.responderHumanId,
+        approvals: link.approvals || {},
+      };
+    }
+
+    this.dataPlane.applyPolicySnapshot(snapshot);
+    return snapshot;
   }
 
   private loadBugReports(): void {
@@ -239,6 +390,7 @@ export class AgentLinkServer {
     try {
       fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
       fs.renameSync(tmpPath, this.stateFilePath);
+      this.syncPolicyToDataPlane();
     } catch (e: any) {
       console.error('[AgentLink Server] Could not save state to disk:', e.message);
       const persistenceErr: any = new Error(`Failed to persist control-plane state: ${e.message}`);
@@ -664,6 +816,8 @@ Instructions for your Agent:
     this.isShuttingDown = true;
     this.isReady = false;
 
+    this.dataPlane.initiateShutdown();
+
     // 1. Flush any pending debounced state save immediately
     if (this.stateSaveTimer) {
       clearTimeout(this.stateSaveTimer);
@@ -695,6 +849,9 @@ Instructions for your Agent:
 
   public async gracefulShutdown(timeoutMs: number = 5000): Promise<void> {
     this.initiateShutdown();
+    try {
+      await this.dataPlane.gracefulShutdown(timeoutMs);
+    } catch {}
 
     // 4. Close server and active socket connections with bounded timeout
     return new Promise((resolve) => {
@@ -745,7 +902,7 @@ Instructions for your Agent:
     }
   }
 
-  private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const startTime = Date.now();
     let securityNote: string | undefined;
 
@@ -863,41 +1020,48 @@ Instructions for your Agent:
       });
     };
 
-    // 0a. Health and readiness check (Feature 10)
+    // 0a. Decomposed Health and Readiness Check (Feature 10 & 11)
     if (parsedUrl === '/health' || parsedUrl === '/api/health') {
-      if (this.isShuttingDown || !this.isReady) {
-        this.sendJson(res, 503, { status: 'shutting_down', ready: false });
-        return;
-      }
-      this.sendJson(res, 200, {
-        status: 'ok',
-        ready: true,
+      const dataPlaneHealth = this.dataPlane.getHealthStatus();
+      const isControlPlaneShutdown = this.isShuttingDown || !this.isReady;
+      const isHealthy = !isControlPlaneShutdown && dataPlaneHealth.status === 'ok';
+      const statusCode = isHealthy ? 200 : 503;
+
+      this.sendJson(res, statusCode, {
+        status: isHealthy ? 'ok' : (isControlPlaneShutdown ? 'shutting_down' : 'degraded'),
+        ready: isHealthy,
         uptime: Math.floor((Date.now() - this.startTime) / 1000),
-      });
-      return;
-    }
-
-    // 0b. Operational Metrics Endpoint (Feature 10.5)
-    if (req.method === 'GET' && (parsedUrl === '/api/metrics' || parsedUrl === '/metrics')) {
-      const spoolMetrics = this.messageSpool.getMetrics();
-      this.sendJson(res, 200, {
-        status: 'ok',
-        uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1000),
-        ready: this.isReady && !this.isShuttingDown,
-        metrics: {
-          messagesAccepted: this.metrics.messagesAccepted,
-          messagesDelivered: this.metrics.messagesDelivered,
-          rejections: this.metrics.rejections,
-          activeLeases: spoolMetrics.inFlightCount,
-          queueDepth: spoolMetrics.availableCount,
-          quarantinedCount: spoolMetrics.quarantinedCount,
-          spoolBytes: spoolMetrics.totalBytes,
+        controlPlane: {
+          status: isControlPlaneShutdown ? 'shutting_down' : 'ok',
+          ready: !isControlPlaneShutdown,
+          policyRevision: this.policyRevision,
         },
+        dataPlane: dataPlaneHealth,
       });
       return;
     }
 
-    // 0c. Graceful shutdown gate for mutating operations (Feature 10.2)
+    // 0b. Operational Metrics Endpoint (Feature 10.5 & 11)
+    if (req.method === 'GET' && (parsedUrl === '/api/metrics' || parsedUrl === '/metrics')) {
+      await this.dataPlane.handleRequest(req, res);
+      return;
+    }
+
+    // 0c. Delegate Data Plane routes directly to DataPlane engine (Feature 11)
+    const isDataPlaneForwarding =
+      (req.method === 'POST' && parsedUrl.startsWith('/api/links/') && (parsedUrl.endsWith('/send') || parsedUrl.endsWith('/message'))) ||
+      (req.method === 'GET' && parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/poll')) ||
+      (req.method === 'POST' && parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/ack')) ||
+      (req.method === 'POST' && parsedUrl.startsWith('/api/agents/') && parsedUrl.endsWith('/nack')) ||
+      (req.method === 'POST' && parsedUrl === '/internal/policy');
+
+    if (isDataPlaneForwarding) {
+      this.syncPolicyToDataPlane();
+      const handled = await this.dataPlane.handleRequest(req, res);
+      if (handled) return;
+    }
+
+    // 0d. Graceful shutdown gate for mutating operations (Feature 10.2)
     if (this.isShuttingDown && req.method !== 'GET' && req.method !== 'OPTIONS') {
       res.setHeader('Retry-After', '1');
       this.sendJson(res, 503, {
