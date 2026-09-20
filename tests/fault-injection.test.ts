@@ -89,7 +89,10 @@ describe('Feature 8.2: Fault Injection & Resilience Test Suite', () => {
           }),
         });
 
-        expect(regRes.status).toBe(200);
+        // Feature 10: A failed write produces a failure response rather than a false durable-acceptance claim
+        expect(regRes.status).toBe(500);
+        const errJson = await regRes.json();
+        expect(errJson.error).toBe('persistence_error');
 
         // Verify server is still alive and handling requests despite write error
         const pingRes = await fetch(`http://127.0.0.1:${port}/api/server-info`);

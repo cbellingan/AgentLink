@@ -390,6 +390,63 @@ export class MessageSpool {
     return queue.map(id => this.messagesByMsgId.get(id)).filter((m): m is SpoolMessageEntry => !!m);
   }
 
+  public releaseAllLeases(): number {
+    let released = 0;
+    for (const m of this.messagesByMsgId.values()) {
+      if (m.state === 'in_flight') {
+        m.state = 'available';
+        m.leaseId = undefined;
+        m.leaseExpiresAt = undefined;
+        released++;
+      }
+    }
+    if (released > 0) {
+      this.persist();
+    }
+    return released;
+  }
+
+  public getMetrics(): {
+    totalEnqueued: number;
+    totalAcknowledged: number;
+    availableCount: number;
+    inFlightCount: number;
+    quarantinedCount: number;
+    totalBytes: number;
+  } {
+    let availableCount = 0;
+    let inFlightCount = 0;
+    let quarantinedCount = 0;
+    let totalBytes = 0;
+    const now = Date.now();
+
+    for (const m of this.messagesByMsgId.values()) {
+      const raw = typeof m.payload === 'string' ? m.payload : JSON.stringify(m.payload);
+      totalBytes += Buffer.byteLength(raw, 'utf8');
+
+      if (m.state === 'available') {
+        availableCount++;
+      } else if (m.state === 'in_flight') {
+        if (m.leaseExpiresAt && m.leaseExpiresAt <= now) {
+          availableCount++;
+        } else {
+          inFlightCount++;
+        }
+      } else if (m.state === 'rejected') {
+        quarantinedCount++;
+      }
+    }
+
+    return {
+      totalEnqueued: this.messagesByMsgId.size + this.acknowledgedMsgIds.size,
+      totalAcknowledged: this.acknowledgedMsgIds.size,
+      availableCount,
+      inFlightCount,
+      quarantinedCount,
+      totalBytes,
+    };
+  }
+
   public clear(): void {
     this.messagesByMsgId.clear();
     this.recipientQueues.clear();
@@ -417,6 +474,10 @@ export class MessageSpool {
       fs.renameSync(tmpPath, this.spoolFilePath);
     } catch (err: any) {
       console.error(`[MessageSpool Error] Failed to persist spool to ${this.spoolFilePath}:`, err.message);
+      const persistenceErr: any = new Error(`Failed to persist message spool to disk: ${err.message}`);
+      persistenceErr.code = 'persistence_error';
+      persistenceErr.statusCode = 500;
+      throw persistenceErr;
     }
   }
 

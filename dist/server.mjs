@@ -280,6 +280,51 @@ var MessageSpool = class {
     const queue = this.recipientQueues.get(targetId) || [];
     return queue.map((id) => this.messagesByMsgId.get(id)).filter((m) => !!m);
   }
+  releaseAllLeases() {
+    let released = 0;
+    for (const m of this.messagesByMsgId.values()) {
+      if (m.state === "in_flight") {
+        m.state = "available";
+        m.leaseId = void 0;
+        m.leaseExpiresAt = void 0;
+        released++;
+      }
+    }
+    if (released > 0) {
+      this.persist();
+    }
+    return released;
+  }
+  getMetrics() {
+    let availableCount = 0;
+    let inFlightCount = 0;
+    let quarantinedCount = 0;
+    let totalBytes = 0;
+    const now = Date.now();
+    for (const m of this.messagesByMsgId.values()) {
+      const raw = typeof m.payload === "string" ? m.payload : JSON.stringify(m.payload);
+      totalBytes += Buffer.byteLength(raw, "utf8");
+      if (m.state === "available") {
+        availableCount++;
+      } else if (m.state === "in_flight") {
+        if (m.leaseExpiresAt && m.leaseExpiresAt <= now) {
+          availableCount++;
+        } else {
+          inFlightCount++;
+        }
+      } else if (m.state === "rejected") {
+        quarantinedCount++;
+      }
+    }
+    return {
+      totalEnqueued: this.messagesByMsgId.size + this.acknowledgedMsgIds.size,
+      totalAcknowledged: this.acknowledgedMsgIds.size,
+      availableCount,
+      inFlightCount,
+      quarantinedCount,
+      totalBytes
+    };
+  }
   clear() {
     this.messagesByMsgId.clear();
     this.recipientQueues.clear();
@@ -304,6 +349,10 @@ var MessageSpool = class {
       fs.renameSync(tmpPath, this.spoolFilePath);
     } catch (err) {
       console.error(`[MessageSpool Error] Failed to persist spool to ${this.spoolFilePath}:`, err.message);
+      const persistenceErr = new Error(`Failed to persist message spool to disk: ${err.message}`);
+      persistenceErr.code = "persistence_error";
+      persistenceErr.statusCode = 500;
+      throw persistenceErr;
     }
   }
   load() {
@@ -380,6 +429,15 @@ var AgentLinkServer = class {
   wsHeartbeatInterval = null;
   stateFilePath;
   lastKeySaveTime = 0;
+  // Feature 10: Lifecycle & Operational Metrics
+  isShuttingDown = false;
+  isReady = true;
+  startTime = Date.now();
+  metrics = {
+    messagesAccepted: 0,
+    messagesDelivered: 0,
+    rejections: 0
+  };
   constructor(port2 = 3e3, staticPath2) {
     this.port = port2;
     this.staticPath = staticPath2 || path2.resolve("web");
@@ -520,21 +578,39 @@ var AgentLinkServer = class {
       console.warn("[AgentLink Server] Could not load state from disk:", e);
     }
   }
-  saveState() {
-    try {
-      const dir = path2.dirname(this.stateFilePath);
-      if (!fs2.existsSync(dir)) {
-        fs2.mkdirSync(dir, { recursive: true });
+  stateSaveTimer = null;
+  scheduleSaveState() {
+    if (this.stateSaveTimer) return;
+    this.stateSaveTimer = setTimeout(() => {
+      this.stateSaveTimer = null;
+      try {
+        this.saveState();
+      } catch (err) {
+        console.error("[AgentLink Server] Debounced saveState failed:", err.message);
       }
-      const data = {
-        apiKeys: Object.fromEntries(this.apiKeys.entries()),
-        agents: Object.fromEntries(this.agents.entries()),
-        links: Object.fromEntries(this.links.entries()),
-        invites: Object.fromEntries(Array.from(this.invites.entries()).filter(([k]) => k.startsWith("inv_")))
-      };
-      fs2.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), "utf8");
+    }, 1e3);
+  }
+  saveState() {
+    const dir = path2.dirname(this.stateFilePath);
+    if (!fs2.existsSync(dir)) {
+      fs2.mkdirSync(dir, { recursive: true });
+    }
+    const data = {
+      apiKeys: Object.fromEntries(this.apiKeys.entries()),
+      agents: Object.fromEntries(this.agents.entries()),
+      links: Object.fromEntries(this.links.entries()),
+      invites: Object.fromEntries(Array.from(this.invites.entries()).filter(([k]) => k.startsWith("inv_")))
+    };
+    const tmpPath = `${this.stateFilePath}.tmp.${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    try {
+      fs2.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf8");
+      fs2.renameSync(tmpPath, this.stateFilePath);
     } catch (e) {
-      console.warn("[AgentLink Server] Could not save state to disk:", e);
+      console.error("[AgentLink Server] Could not save state to disk:", e.message);
+      const persistenceErr = new Error(`Failed to persist control-plane state: ${e.message}`);
+      persistenceErr.code = "persistence_error";
+      persistenceErr.statusCode = 500;
+      throw persistenceErr;
     }
   }
   calculateSafetyNumber(keyA, keyB) {
@@ -896,7 +972,56 @@ Instructions for your Agent:
       }
     });
   }
+  initiateShutdown() {
+    if (this.isShuttingDown) return;
+    this.isShuttingDown = true;
+    this.isReady = false;
+    if (this.stateSaveTimer) {
+      clearTimeout(this.stateSaveTimer);
+      this.stateSaveTimer = null;
+    }
+    try {
+      this.saveState();
+    } catch (err) {
+      console.error("[AgentLink Server] Error persisting state during shutdown:", err.message);
+    }
+    for (const [waiterId, waiters] of this.pollWaiters.entries()) {
+      for (const resolver of waiters) {
+        try {
+          resolver({ messages: [], leaseId: "", leaseExpiresAt: 0 });
+        } catch {
+        }
+      }
+    }
+    this.pollWaiters.clear();
+    try {
+      this.messageSpool.releaseAllLeases();
+    } catch (err) {
+      console.error("[AgentLink Server] Error releasing leases during shutdown:", err.message);
+    }
+  }
+  async gracefulShutdown(timeoutMs = 5e3) {
+    this.initiateShutdown();
+    return new Promise((resolve) => {
+      const forceTimer = setTimeout(() => {
+        try {
+          if (this.server) this.server.closeAllConnections?.();
+        } catch {
+        }
+        this.close().then(resolve);
+      }, timeoutMs);
+      setTimeout(() => {
+        this.close().then(() => {
+          clearTimeout(forceTimer);
+          resolve();
+        });
+      }, Math.min(timeoutMs, 200));
+    });
+  }
   sendJson(res, statusCode, data) {
+    if (statusCode >= 400) {
+      this.metrics.rejections++;
+    }
     try {
       const incomingReq = res.req;
       if (incomingReq && !incomingReq.readableEnded) {
@@ -1024,7 +1149,46 @@ Instructions for your Agent:
           }
         });
       };
+      if (parsedUrl === "/health" || parsedUrl === "/api/health") {
+        if (this.isShuttingDown || !this.isReady) {
+          this.sendJson(res, 503, { status: "shutting_down", ready: false });
+          return;
+        }
+        this.sendJson(res, 200, {
+          status: "ok",
+          ready: true,
+          uptime: Math.floor((Date.now() - this.startTime) / 1e3)
+        });
+        return;
+      }
+      if (req.method === "GET" && (parsedUrl === "/api/metrics" || parsedUrl === "/metrics")) {
+        const spoolMetrics = this.messageSpool.getMetrics();
+        this.sendJson(res, 200, {
+          status: "ok",
+          uptimeSeconds: Math.floor((Date.now() - this.startTime) / 1e3),
+          ready: this.isReady && !this.isShuttingDown,
+          metrics: {
+            messagesAccepted: this.metrics.messagesAccepted,
+            messagesDelivered: this.metrics.messagesDelivered,
+            rejections: this.metrics.rejections,
+            activeLeases: spoolMetrics.inFlightCount,
+            queueDepth: spoolMetrics.availableCount,
+            quarantinedCount: spoolMetrics.quarantinedCount,
+            spoolBytes: spoolMetrics.totalBytes
+          }
+        });
+        return;
+      }
+      if (this.isShuttingDown && req.method !== "GET" && req.method !== "OPTIONS") {
+        res.setHeader("Retry-After", "1");
+        this.sendJson(res, 503, {
+          error: "server_shutting_down",
+          message: "Server is undergoing graceful shutdown. Retry with backoff."
+        });
+        return;
+      }
       if (req.method === "GET" && parsedUrl === "/api/server-info") {
+        const spoolMetrics = this.messageSpool.getMetrics();
         this.sendJson(res, 200, {
           name: `${this.brandName} Zero-Knowledge Relay`,
           version: "1.0.0",
@@ -1034,7 +1198,15 @@ Instructions for your Agent:
           port: this.port,
           portalUrl: this.portalUrl,
           brandName: this.brandName,
-          bindHost: this.bindHost || void 0
+          bindHost: this.bindHost || void 0,
+          ready: this.isReady && !this.isShuttingDown,
+          metrics: {
+            messagesAccepted: this.metrics.messagesAccepted,
+            messagesDelivered: this.metrics.messagesDelivered,
+            rejections: this.metrics.rejections,
+            queueDepth: spoolMetrics.availableCount,
+            activeLeases: spoolMetrics.inFlightCount
+          }
         });
         return;
       }
@@ -1933,7 +2105,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             const leasedIds = new Set(leaseResult.messages.map((m) => m.msgId));
             this.messageQueues.set(agentId, q.filter((m) => !leasedIds.has(m.msgId)));
           }
-          this.saveState();
+          this.scheduleSaveState();
           this.sendJson(res, 200, {
             messages: leaseResult.messages,
             leaseId: leaseResult.leaseId,
@@ -1960,7 +2132,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
               l.lastDeliveredAt = (/* @__PURE__ */ new Date()).toISOString();
             }
           }
-          this.saveState();
+          this.scheduleSaveState();
           this.sendJson(res, 200, {
             messages: leaseData.messages,
             leaseId: leaseData.leaseId,
@@ -2001,7 +2173,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
             return;
           }
           const ackResult = this.messageSpool.ack(agentId, messageIds, leaseId);
-          this.saveState();
+          this.metrics.messagesDelivered += ackResult.acknowledged.length;
           this.sendJson(res, 200, {
             status: "ok",
             acknowledged: ackResult.acknowledged,
@@ -2435,7 +2607,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                 operatorEmail: operatorEmail2
               });
               if (link.recentMessages.length > 100) link.recentMessages.shift();
-              this.saveState();
+              this.scheduleSaveState();
               this.notifySupervisors({ type: "message_sent", linkId, senderId, targetId, seq });
             }
             const isOperator = Boolean(human && !apiKey) || body.senderType === "operator";
@@ -2456,6 +2628,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
                 senderKid: isOperator ? void 0 : senderAgent?.kid,
                 payload: body.payload
               });
+              this.metrics.messagesAccepted++;
             } catch (spoolErr) {
               const status = spoolErr.statusCode || 500;
               this.sendJson(res, status, {
@@ -2953,7 +3126,7 @@ Note: Messages remain fail-closed and strictly blocked until both human operator
     const now = Date.now();
     if (now - this.lastKeySaveTime > 5e3) {
       this.lastKeySaveTime = now;
-      this.saveState();
+      this.scheduleSaveState();
     }
   }
   resolveApiKey(token) {
@@ -3003,3 +3176,20 @@ server.listen(bindHost).catch((err) => {
   console.error("Fatal server startup error:", err);
   process.exit(1);
 });
+var isStopping = false;
+var handleSignal = async (signal) => {
+  if (isStopping) return;
+  isStopping = true;
+  console.log(`
+[AgentLink Server] Received ${signal}. Initiating graceful shutdown...`);
+  try {
+    await server.gracefulShutdown(5e3);
+    console.log("[AgentLink Server] Graceful shutdown complete. Exiting.");
+    process.exit(0);
+  } catch (err) {
+    console.error("[AgentLink Server] Error during graceful shutdown:", err.message);
+    process.exit(1);
+  }
+};
+process.on("SIGTERM", () => handleSignal("SIGTERM"));
+process.on("SIGINT", () => handleSignal("SIGINT"));

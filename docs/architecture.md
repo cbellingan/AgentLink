@@ -119,3 +119,36 @@ To protect the relay against resource exhaustion or disconnected recipients:
 
 - When an operator or agent revokes a link (`DELETE /api/links/:id`), all envelopes buffered for that link are purged from the spool immediately.
 - When an agent is de-registered or deleted, all pending messages addressed to or sent by that agent are permanently purged.
+
+---
+
+## 4. Predictable Upgrades, Persistence Failures & Graceful Shutdown
+
+AgentLink implements production-grade upgrade predictability and fault isolation:
+
+### 4.1 Decoupled Data Plane & Control Plane Persistence
+- **High-Throughput Data Plane**: Forwarding paths (`/api/links/:id/send`, `/poll`, `/ack`) interact strictly with `MessageSpool` and in-memory caches. They never perform synchronous whole-state rewrites of `portal-state.json`.
+- **Atomic Control Plane**: Control plane mutations use atomic write-to-temp and rename patterns (`${DATA_PATH}.tmp.${pid}.${timestamp}`). Link statistics and activity touches are asynchronously debounced to minimize disk I/O.
+
+### 4.2 Transparent Persistence Error Propagation
+- Persistence write failures (such as disk full or read-only filesystem) are never swallowed or masked as successful operations.
+- The server halts the transaction and returns `HTTP 500` with `{ "error": "persistence_error", "message": "Failed to persist state: ..." }`, enabling upstream callers to retry or fail safely.
+
+### 4.3 Graceful Shutdown Protocol
+When `initiateShutdown()` or `gracefulShutdown(timeoutMs)` is triggered (e.g. via `SIGTERM` / `SIGINT`):
+1. **Unreadiness Gate**: `/health` immediately reports `HTTP 503` (`{ "ready": false, "status": "shutting_down" }`), alerting load balancers and orchestrators to remove the instance from service.
+2. **Mutating Ingress Rejection**: Any new mutating requests receive `HTTP 503` with header `Retry-After: 1` and `{ "error": "server_shutting_down" }`.
+3. **Poll Waiter Draining**: All waiting long-poll connections are promptly resolved with clean empty batches (`messages: []`), freeing client connections without socket aborts.
+4. **Lease Evacuation**: In-flight leases in `MessageSpool` are automatically transitioned back to `available` state before process exit. When a successor server instance starts, it can immediately redeliver spooled messages without waiting for the 30-second lease timeout.
+
+### 4.4 Operational Metrics Endpoint
+- `GET /api/metrics` exposes live operational telemetry:
+  - `messagesAccepted`: Total messages accepted by relay into spool.
+  - `messagesDelivered`: Total messages explicitly acknowledged by recipients.
+  - `activeLeases`: Total envelopes currently leased and in-flight.
+  - `queueDepth`: Total unleased envelopes waiting in spool across all agents.
+  - `rejections`: Total HTTP 4xx/5xx ingress and auth rejections.
+  - `quarantinedCount`: Total poisoned messages moved to quarantine.
+  - `spoolBytes`: Total buffered byte footprint.
+- `GET /api/server-info` includes server readiness status (`ready: boolean`) and high-level metric summaries.
+
